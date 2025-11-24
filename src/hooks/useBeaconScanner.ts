@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   startScanning,
   stopScanning,
@@ -6,10 +6,67 @@ import {
 } from "../../modules/expo-kbeaconpro/src/ExpoKBeaconProModule";
 import { BeaconState, RawBeaconData } from "../types/BeaconProtocol";
 import { parseBeaconData } from "../utils/beaconParser";
+import { LocalizationEngine } from "../localization/LocalizationEngine";
+import {
+  BeaconMeasurement,
+  EnvironmentMode,
+  FieldDimensions,
+  PositionEstimate,
+  PropagationConstants,
+} from "../localization/types";
 
-export function useBeaconScanner() {
+const SNAPSHOT_POLL_INTERVAL_MS = 500;
+
+export interface UseBeaconScannerOptions {
+  environment?: EnvironmentMode;
+  fieldDimensions?: FieldDimensions;
+  propagationConstants?: Partial<PropagationConstants>;
+  snapshotIntervalMs?: number;
+}
+
+export function useBeaconScanner(options: UseBeaconScannerOptions = {}) {
   const [beacons, setBeacons] = useState<Map<string, BeaconState>>(new Map());
+  const [filteredBeacons, setFilteredBeacons] = useState<BeaconMeasurement[]>(
+    [],
+  );
+  const [position, setPosition] = useState<PositionEstimate | undefined>();
   const beaconsRef = useRef<Map<string, BeaconState>>(new Map());
+  const engineRef = useRef<LocalizationEngine | null>(null);
+
+  if (!engineRef.current) {
+    engineRef.current = new LocalizationEngine({
+      environment: options.environment,
+      fieldDimensions: options.fieldDimensions,
+      propagationConstants: options.propagationConstants,
+      solverThrottleMs: options.snapshotIntervalMs ?? SNAPSHOT_POLL_INTERVAL_MS,
+    });
+  }
+
+  useEffect(() => {
+    engineRef.current?.setEnvironment({
+      environment: options.environment,
+      fieldDimensions: options.fieldDimensions,
+      propagationConstants: options.propagationConstants,
+    });
+  }, [
+    options.environment,
+    options.fieldDimensions,
+    options.propagationConstants,
+  ]);
+
+  useEffect(() => {
+    const pollInterval =
+      options.snapshotIntervalMs ?? SNAPSHOT_POLL_INTERVAL_MS;
+    const interval = setInterval(() => {
+      const snapshot = engineRef.current?.getSnapshot();
+      if (!snapshot) return;
+
+      setPosition(snapshot.position);
+      setFilteredBeacons(snapshot.beacons);
+    }, pollInterval);
+
+    return () => clearInterval(interval);
+  }, [options.snapshotIntervalMs]);
 
   useEffect(() => {
     let subscription: any;
@@ -37,6 +94,7 @@ export function useBeaconScanner() {
             // For now, we update on every packet to keep RSSI fresh, but in a real app
             // you might throttle state updates to React.
             beaconsRef.current.set(mac, newState);
+            engineRef.current?.ingest(newState);
             hasUpdates = true;
           });
 
@@ -58,5 +116,5 @@ export function useBeaconScanner() {
     };
   }, []);
 
-  return { beacons };
+  return { beacons, filteredBeacons, position };
 }

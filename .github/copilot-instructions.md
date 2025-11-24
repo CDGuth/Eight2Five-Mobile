@@ -218,3 +218,50 @@ Use these keywords as a starting point for searching within the documentation fi
 -   **To connect to a beacon:** Search for `KBeacon` and `connect(password:timeout:delegate:)`.
 -   **To change settings:** Search for `modifyConfig(obj:callback:)` and the relevant configuration object.
 -   **For sensor data:** Search for `Sensor parameters` or `readSensorDataInfo(callback:)`.
+
+## BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms Documentation
+
+**Last Updated:** 2025-11-24
+
+**Documentation Location:** `.github/docs/BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms/`
+
+**Number of Pages:** 1
+
+### Overview
+
+This directory contains 1 documentation pages for BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms, converted to Markdown format.
+
+### Available Documentation Files
+
+- `.github/docs/BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms/llms-txt-documentation.md`
+
+### Key Topics
+
+The documentation covers various aspects of BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms. Reference these files when working with BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms to ensure best practices and correct usage.
+
+### Usage with Copilot
+
+When writing code related to BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms, GitHub Copilot will automatically reference these documentation files to provide:
+- Accurate API usage and examples
+- Best practices and patterns
+- Up-to-date framework features and conventions
+
+## Overview
+
+This directory contains 1 documentation pages for BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms, converted to Markdown format.
+
+### Available Documentation Files
+
+- `.github/docs/BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms/llms-txt-documentation.md`
+
+### Key Topics
+
+The documentation covers various aspects of BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms. Reference these files when working with BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms to ensure best practices and correct usage.
+
+### Usage with Copilot
+
+When writing code related to BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms, GitHub Copilot will automatically reference these documentation files to provide:
+- Accurate API usage and examples
+- Best practices and patterns
+- Up-to-date framework features and conventions
+
