@@ -3,6 +3,8 @@ import { MFASAOptimizer } from "./algorithms/MFASA";
 import {
   DEFAULT_PROPAGATION_CONSTANTS,
   DEFAULT_FIELD_DIMENSIONS,
+  DEFAULT_SOLVER_THROTTLE_MS,
+  DEFAULT_STALE_BEACON_MS,
 } from "./config";
 import { KalmanFilter } from "./filters/KalmanFilter";
 import { LogNormalModel } from "./models/LogNormalModel";
@@ -28,9 +30,6 @@ export interface LocalizationEngineOptions {
   solverThrottleMs?: number;
   staleBeaconMs?: number;
 }
-
-const DEFAULT_SOLVER_THROTTLE_MS = 500;
-const DEFAULT_STALE_BEACON_MS = 5000;
 
 /**
  * Orchestrates the Kalman filtering, distance modeling, and MFASA optimization.

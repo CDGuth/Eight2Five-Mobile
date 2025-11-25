@@ -4,6 +4,18 @@
 
 You are an expert in TypeScript, React Native, Expo, and Mobile UI development.
 
+## Project Description
+
+This repository contains an Expo-based React Native application (iOS and Android) for tracking marching band performers on a rectangular practice field. Each performer carries a mobile device that receives Bluetooth Low Energy (BLE) advertisements from fixed KBeaconPro beacons positioned around or within the field. The native module in `modules/expo-kbeaconpro` exposes scanning APIs and delivers raw advertisement payloads (MAC address, RSSI, and manufacturer data) into the JavaScript layer.
+
+The app parses those advertisements into higher-level beacon state using utilities in `src/utils` (for example `beaconParser`), extracting identity information (including Tx power) and field-relative anchor coordinates (encoded as X/Y percentages and Z height in centimeters). A custom hook, `useBeaconScanner`, subscribes to the native scanner, maintains an in-memory map of visible beacons, and feeds each update into a localization pipeline.
+
+The localization subsystem in `src/localization` smooths noisy RSSI values with a 1D Kalman filter, then uses a propagation model to relate distance and received power. Indoors it applies a standard log-normal path-loss model; outdoors it uses the two-ray ground-reflection model derived from the BLE-based outdoor localization paper in `.github/docs/BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms/`. Rather than converting RSSI to distance directly, the system formulates localization as an optimization problem: it searches for the 2D position that minimizes the root-mean-square error between measured RSSI at each anchor and the RSSI predicted by the chosen propagation model.
+
+To solve this optimization problem, the project currently implements a memetic Firefly Algorithm with Simulated Annealing (MFASA) in `src/localization/algorithms/MFASA.ts`. MFASA maintains a population of candidate positions ("fireflies"), moves them toward better solutions based on relative brightness (lower RMSE), and applies simulated annealing-style random perturbations with a cooling schedule to escape local minima. The optimizer is time-sliced (using small per-step time budgets) so that iterative computation does not block the React Native UI thread. Future algorithms (e.g., GA, PSO, or simpler multilateration) can be added behind the same optimizer interface.
+
+Downstream consumers (screens or components) typically use `useBeaconScanner` to obtain three views of state: the raw per-MAC beacon map for diagnostics, the filtered beacon measurements used by the localization engine, and the latest estimated performer position in meters relative to the field. Copilot suggestions should preserve this flow (native scanner → parser → Kalman filter + propagation model → MFASA optimizer → UI) and avoid breaking the public surface of the native module or hooks without a clear reason.
+
   Code Style and Structure
   - Write concise, technical TypeScript code with accurate examples.
   - Use functional and declarative programming patterns; avoid classes.

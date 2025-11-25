@@ -57,7 +57,26 @@
  */
 
 import { APP_NAMESPACE, PacketType } from "../types/BeaconProtocol";
-import { KBCfgBase } from "../../modules/expo-kbeaconpro/src/ExpoKBeaconPro.types";
+import {
+  KBCfgBase,
+  KBCfgCommon,
+} from "../../modules/expo-kbeaconpro/src/ExpoKBeaconPro.types";
+
+const TX_POWER_TO_REF_RSSI = new Map<number, number>([
+  [8, -51],
+  [4, -55],
+  [0, -59],
+  [-4, -63],
+  [-8, -67],
+  [-12, -71],
+  [-16, -75],
+  [-20, -79],
+  [-40, -99],
+]);
+
+function resolveRefPower(txPower: number): number | undefined {
+  return TX_POWER_TO_REF_RSSI.get(txPower);
+}
 
 // Helper to convert number to hex string with padding
 function toHex(num: number, bytes: number): string {
@@ -89,17 +108,104 @@ function asciiToHex(str: string): string {
   return hex;
 }
 
-export interface BeaconConfigParams {
+function clamp(value: number, min: number, max: number): number {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+export interface BeaconPosition {
   xPercent: number;
   yPercent: number;
   zCm: number;
+}
+
+export interface BeaconIdentitySettings {
   txPower: number;
   isPasswordProtected: boolean;
   isPasswordSerialHash: boolean;
 }
 
+const DEFAULT_POSITION: BeaconPosition = {
+  xPercent: 0,
+  yPercent: 0,
+  zCm: 0,
+};
+
+function normalizePosition(position?: BeaconPosition): BeaconPosition {
+  if (!position) return { ...DEFAULT_POSITION };
+  return {
+    xPercent: clamp(position.xPercent, 0, 100),
+    yPercent: clamp(position.yPercent, 0, 100),
+    zCm: clamp(position.zCm, -32768, 32767),
+  };
+}
+
+export interface BeaconConfigParams
+  extends BeaconPosition,
+    BeaconIdentitySettings {
+  isConfigured?: boolean;
+}
+
+export type BeaconConfigurationStage = "provisional" | "final" | "all";
+
+export interface BeaconConfigurationPlanOptions extends BeaconIdentitySettings {
+  finalPosition: BeaconPosition;
+  provisionalPosition?: BeaconPosition;
+}
+
+export interface BeaconConfigurationPlan {
+  provisional: KBCfgBase[];
+  finalized: KBCfgBase[];
+}
+
+export interface BeaconConfigurationTransport {
+  connect: (
+    macAddress: string,
+    password?: string,
+    timeout?: number,
+  ) => Promise<boolean>;
+  modifyConfig: (macAddress: string, configs: KBCfgBase[]) => Promise<boolean>;
+  disconnect: (macAddress: string) => Promise<boolean>;
+}
+
+type NativeBeaconModule =
+  typeof import("../../modules/expo-kbeaconpro/src/ExpoKBeaconProModule");
+
+let cachedTransport: BeaconConfigurationTransport | null = null;
+
+async function getDefaultTransport(): Promise<BeaconConfigurationTransport> {
+  if (cachedTransport) return cachedTransport;
+  const nativeModule: NativeBeaconModule = await import(
+    "../../modules/expo-kbeaconpro/src/ExpoKBeaconProModule"
+  );
+  cachedTransport = {
+    connect: nativeModule.connect,
+    modifyConfig: nativeModule.modifyConfig,
+    disconnect: nativeModule.disconnect,
+  };
+  return cachedTransport;
+}
+
+export interface ApplyBeaconConfigurationOptions
+  extends BeaconConfigurationPlanOptions {
+  macAddress: string;
+  password?: string;
+  timeout?: number;
+  stage?: BeaconConfigurationStage;
+  disconnectAfter?: boolean;
+  skipConnect?: boolean;
+}
+
+export interface BeaconConfigurationResult {
+  provisionalApplied: boolean;
+  finalizedApplied: boolean;
+  plan: BeaconConfigurationPlan;
+}
+
 export function generateBeaconConfig(params: BeaconConfigParams): KBCfgBase[] {
   const configs: any[] = []; // Using any[] because we need to cast to KBCfgAdvEddyUID which might not be fully typed in the module yet
+  const isConfigured = params.isConfigured ?? false; // Default to false until configuration is completed
 
   // --- Slot 0: Identity ---
   // NID: APP_NAMESPACE
@@ -107,7 +213,8 @@ export function generateBeaconConfig(params: BeaconConfigParams): KBCfgBase[] {
 
   const nid0 = "0x" + asciiToHex(APP_NAMESPACE);
 
-  let flags = 0x01; // Bit 0: Configured = 1
+  let flags = 0x00;
+  if (isConfigured) flags |= 0x01;
   if (params.isPasswordProtected) flags |= 0x02;
   if (params.isPasswordSerialHash) flags |= 0x04;
 
@@ -178,5 +285,108 @@ export function generateBeaconConfig(params: BeaconConfigParams): KBCfgBase[] {
     advTriggerOnly: false,
   });
 
+  const refPower1m = resolveRefPower(params.txPower);
+  if (typeof refPower1m === "number") {
+    configs.push({
+      refPower1Meters: refPower1m,
+    } as KBCfgCommon);
+  }
+
   return configs;
+}
+
+/**
+ * Builds the full two-stage configuration (provisional + finalized) for a beacon.
+ */
+export function buildBeaconConfigurationPlan(
+  options: BeaconConfigurationPlanOptions,
+): BeaconConfigurationPlan {
+  const identity: BeaconIdentitySettings = {
+    txPower: options.txPower,
+    isPasswordProtected: options.isPasswordProtected,
+    isPasswordSerialHash: options.isPasswordSerialHash,
+  };
+
+  const provisionalParams: BeaconConfigParams = {
+    ...normalizePosition(options.provisionalPosition),
+    ...identity,
+    isConfigured: false,
+  };
+
+  const finalParams: BeaconConfigParams = {
+    ...normalizePosition(options.finalPosition),
+    ...identity,
+    isConfigured: true,
+  };
+
+  return {
+    provisional: generateBeaconConfig(provisionalParams),
+    finalized: generateBeaconConfig(finalParams),
+  };
+}
+
+/**
+ * Applies the requested stage of the configuration plan to a beacon.
+ */
+export async function applyBeaconConfiguration(
+  options: ApplyBeaconConfigurationOptions,
+  transport?: BeaconConfigurationTransport,
+): Promise<BeaconConfigurationResult> {
+  const plan = buildBeaconConfigurationPlan(options);
+  const stage: BeaconConfigurationStage = options.stage ?? "provisional";
+  const shouldApplyProvisional = stage === "provisional" || stage === "all";
+  const shouldApplyFinal = stage === "final" || stage === "all";
+  const activeTransport = transport ?? (await getDefaultTransport());
+
+  if (!shouldApplyProvisional && !shouldApplyFinal) {
+    throw new Error("Invalid configuration stage supplied");
+  }
+
+  let connected = false;
+  if (!options.skipConnect) {
+    const didConnect = await activeTransport.connect(
+      options.macAddress,
+      options.password,
+      options.timeout,
+    );
+    if (!didConnect) {
+      throw new Error(`Unable to connect to beacon ${options.macAddress}`);
+    }
+    connected = true;
+  }
+
+  try {
+    let provisionalApplied = false;
+    let finalizedApplied = false;
+
+    if (shouldApplyProvisional) {
+      provisionalApplied = await activeTransport.modifyConfig(
+        options.macAddress,
+        plan.provisional,
+      );
+      if (!provisionalApplied) {
+        throw new Error(
+          `Failed to apply provisional configuration to beacon ${options.macAddress}`,
+        );
+      }
+    }
+
+    if (shouldApplyFinal) {
+      finalizedApplied = await activeTransport.modifyConfig(
+        options.macAddress,
+        plan.finalized,
+      );
+      if (!finalizedApplied) {
+        throw new Error(
+          `Failed to apply finalized configuration to beacon ${options.macAddress}`,
+        );
+      }
+    }
+
+    return { provisionalApplied, finalizedApplied, plan };
+  } finally {
+    if (connected && options.disconnectAfter !== false) {
+      await activeTransport.disconnect(options.macAddress);
+    }
+  }
 }

@@ -1,4 +1,3 @@
-// Reexport the native module. On web, it will be resolved to ExpoKBeaconProModule.web.ts
-// and on native platforms to ExpoKBeaconProModule.ts
+// Reexport the native module for the supported native platforms.
 export * from "./src/ExpoKBeaconProModule";
 export * from "./src/ExpoKBeaconPro.types";

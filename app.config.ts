@@ -2,6 +2,7 @@ module.exports = {
   expo: {
     name: "Eight2Five-iOS-Android",
     slug: "Eight2Five-iOS-Android",
+    platforms: ["ios", "android"],
     version: "1.0.0",
     orientation: "portrait",
     icon: "./assets/icon.png",
@@ -24,9 +25,6 @@ module.exports = {
         backgroundColor: "#ffffff",
       },
       edgeToEdgeEnabled: true,
-    },
-    web: {
-      favicon: "./assets/favicon.png",
     },
     plugins: [
       [

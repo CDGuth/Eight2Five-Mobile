@@ -1,4 +1,4 @@
-import { DEFAULT_TX_POWER_DBM } from "../config";
+import { DEFAULT_MFASA_OPTIONS, DEFAULT_TX_POWER_DBM } from "../config";
 import {
   AnchorGeometry,
   LocalizationOptimizer,
@@ -6,18 +6,6 @@ import {
   PositionEstimate,
   SearchBounds,
 } from "../types";
-
-const DEFAULT_OPTIONS = {
-  populationSize: 25,
-  maxIterations: 200,
-  beta0: 1,
-  lightAbsorption: 0.5,
-  alpha: 0.2,
-  randomStepScale: 1,
-  initialTemperature: 10,
-  coolingRate: 0.95,
-  timeBudgetMs: 8,
-};
 
 interface Firefly {
   position: { x: number; y: number };
@@ -52,7 +40,10 @@ export class MFASAOptimizer implements LocalizationOptimizer {
   private readonly options: MFASAOptions;
 
   constructor(options: Partial<MFASAOptions> = {}) {
-    this.options = { ...DEFAULT_OPTIONS, ...options } as MFASAOptions;
+    this.options = {
+      ...DEFAULT_MFASA_OPTIONS,
+      ...options,
+    } as MFASAOptions;
   }
 
   solve(opts: OptimizationInput): Promise<PositionEstimate> {

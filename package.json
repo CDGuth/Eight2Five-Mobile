@@ -6,7 +6,6 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web",
     "lint": "expo lint",
     "test": "jest --watchAll=false"
   },
@@ -19,9 +18,7 @@
     "jest": "~29.7.0",
     "jest-expo": "~54.0.13",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-web": "^0.21.0"
+    "react-native": "0.81.5"
   },
   "private": true,
   "devDependencies": {
@@ -46,8 +43,7 @@
     ],
     "collectCoverage": true,
     "collectCoverageFrom": [
-      "modules/expo-kbeaconpro/src/**/*.{ts,tsx}",
-      "!modules/expo-kbeaconpro/src/**/*.web.ts"
+      "modules/expo-kbeaconpro/src/**/*.{ts,tsx}"
     ]
   }
 }
