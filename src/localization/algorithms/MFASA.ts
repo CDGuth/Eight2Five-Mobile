@@ -1,4 +1,7 @@
-import { DEFAULT_MFASA_OPTIONS, DEFAULT_TX_POWER_DBM } from "../config";
+import {
+  DEFAULT_MFASA_OPTIONS,
+  DEFAULT_TX_POWER_DBM,
+} from "../LocalizationConfig";
 import type {
   AnchorGeometry,
   LocalizationOptimizer,
@@ -22,7 +25,8 @@ export interface MFASAOptions {
   randomStepScale: number;
   initialTemperature: number;
   coolingRate: number;
-  timeBudgetMs: number;
+  timeBudgetMs: number; // Per-slice time budget
+  totalTimeLimitMs?: number; // Total execution time limit
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -60,6 +64,7 @@ export class MFASAOptimizer implements LocalizationOptimizer {
     const config: MFASAOptions = {
       ...this.options,
       timeBudgetMs: opts.timeBudgetMs ?? this.options.timeBudgetMs,
+      totalTimeLimitMs: opts.totalTimeLimitMs,
     };
 
     const anchorMap = this.buildAnchorMap(opts.anchors);
@@ -73,6 +78,12 @@ export class MFASAOptimizer implements LocalizationOptimizer {
         anchorMap,
         metrics,
       );
+      const initialPopulation = population.map((f) => ({
+        x: f.position.x,
+        y: f.position.y,
+        error: f.error,
+      }));
+
       let best = this.extractBest(population, 0);
       const initialError = best.errorRmse;
       let temperature = config.initialTemperature;
@@ -81,7 +92,17 @@ export class MFASAOptimizer implements LocalizationOptimizer {
       const step = () => {
         this.currentTimeout = null;
         const stepStart = now();
-        while (iteration < config.maxIterations) {
+        // If totalTimeLimitMs is set, we ignore maxIterations and run until time is up
+        // Otherwise we respect maxIterations
+        const hasTimeLimit =
+          config.totalTimeLimitMs !== undefined && config.totalTimeLimitMs > 0;
+
+        while (hasTimeLimit ? true : iteration < config.maxIterations) {
+          // Check total time limit
+          if (hasTimeLimit && now() - startTime >= config.totalTimeLimitMs!) {
+            break;
+          }
+
           this.performFireflyMoves(
             population,
             config,
@@ -114,6 +135,12 @@ export class MFASAOptimizer implements LocalizationOptimizer {
           initialError,
           finalError: best.errorRmse,
           finalTemperature: temperature,
+          initialPopulation,
+          finalPopulation: population.map((f) => ({
+            x: f.position.x,
+            y: f.position.y,
+            error: f.error,
+          })),
         };
         resolve(best);
       };

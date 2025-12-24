@@ -5,7 +5,7 @@ import {
   DEFAULT_FIELD_DIMENSIONS,
   DEFAULT_SOLVER_THROTTLE_MS,
   DEFAULT_STALE_BEACON_MS,
-} from "./config";
+} from "./LocalizationConfig";
 import { KalmanFilter } from "./filters/KalmanFilter";
 import { LogNormalModel } from "./models/LogNormalModel";
 import { TwoRayGroundModel } from "./models/TwoRayGroundModel";
