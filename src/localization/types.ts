@@ -90,7 +90,6 @@ export interface OptimizationInput {
   constants: PropagationConstants;
   bounds: SearchBounds;
   timeBudgetMs?: number;
-  totalTimeLimitMs?: number;
 }
 
 export interface AnchorGeometry {
@@ -108,8 +107,6 @@ export interface AlgorithmDiagnostics {
   initialError: number;
   finalError: number;
   finalTemperature?: number;
-  initialPopulation?: { x: number; y: number; error: number }[];
-  finalPopulation?: { x: number; y: number; error: number }[];
 }
 
 export interface PositionEstimate {

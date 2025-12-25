@@ -23,13 +23,13 @@ export const DEFAULT_TX_POWER_DBM = 8;
 export const DEFAULT_MFASA_OPTIONS = {
   populationSize: 25,
   maxIterations: 200,
-  beta0: 2,
-  lightAbsorption: 0.1,
+  beta0: 1,
+  lightAbsorption: 0.5,
   alpha: 0.2,
   randomStepScale: 1,
   initialTemperature: 10,
   coolingRate: 0.95,
-  timeBudgetMs: 200,
+  timeBudgetMs: 8,
 } as const;
 
 export const DEFAULT_SOLVER_THROTTLE_MS = 500;
