@@ -31,9 +31,10 @@ export class TwoRayGroundModel implements PropagationModel {
     const xPlusXPrime = Math.sqrt((ht + hr) ** 2 + d ** 2);
     const deltaPhi = (2 * Math.PI * (xPlusXPrime - l)) / wavelength;
 
-    const directComponent = Math.sqrt(transmitterGain) / l;
+    const combinedGainRoot = Math.sqrt(transmitterGain * receiverGain);
+    const directComponent = combinedGainRoot / l;
     const reflectedComponentMagnitude =
-      (reflectionCoefficient * Math.sqrt(receiverGain)) / xPlusXPrime;
+      (reflectionCoefficient * combinedGainRoot) / xPlusXPrime;
 
     const real =
       directComponent + reflectedComponentMagnitude * Math.cos(deltaPhi);

@@ -1,4 +1,10 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useMemo,
+} from "react";
 import {
   View,
   Text,
@@ -9,8 +15,13 @@ import {
   PanResponder,
   LayoutChangeEvent,
   Alert,
+  ActivityIndicator,
+  Modal,
+  Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as Clipboard from "expo-clipboard";
+import { captureRef } from "react-native-view-shot";
 import { MFASAOptimizer } from "../localization/algorithms/MFASA";
 import { LogNormalModel } from "../localization/models/LogNormalModel";
 import { TwoRayGroundModel } from "../localization/models/TwoRayGroundModel";
@@ -20,6 +31,8 @@ import {
   DEFAULT_FIELD_DIMENSIONS,
   DEFAULT_MFASA_OPTIONS,
   DEFAULT_TX_POWER_DBM,
+  DEFAULT_SIMULATION_NOISE,
+  DEFAULT_KALMAN_CONFIG,
 } from "../localization/LocalizationConfig";
 import {
   AnchorGeometry,
@@ -30,49 +43,102 @@ import {
 
 const ACCENT_COLOR = "#3C6EC8";
 
+const FIELD_PRESETS = [
+  { label: "Custom", value: "custom", width: 100, length: 100 },
+  {
+    label: "Football Field",
+    value: "football",
+    width: 109.73,
+    length: 48.77,
+  },
+];
+
+const CollapsibleSection = ({
+  title,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <View style={styles.section}>
+      <TouchableOpacity
+        style={styles.sectionHeader}
+        onPress={() => setIsOpen(!isOpen)}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <Text style={styles.collapseIcon}>{isOpen ? "−" : "+"}</Text>
+      </TouchableOpacity>
+      {isOpen && <View style={styles.sectionContent}>{children}</View>}
+    </View>
+  );
+};
+
+const LabelWithTooltip = ({
+  label,
+  tooltip,
+}: {
+  label: string;
+  tooltip?: string;
+}) => (
+  <View style={styles.labelContainer}>
+    <Text style={styles.labelText}>{label}</Text>
+    {tooltip && (
+      <TouchableOpacity
+        onPress={() => Alert.alert(label, tooltip)}
+        style={{ marginLeft: 6 }}
+      >
+        <View
+          style={{
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            backgroundColor: "#eee",
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1,
+            borderColor: "#ddd",
+          }}
+        >
+          <Text style={{ fontSize: 10, fontWeight: "bold", color: "#888" }}>
+            ?
+          </Text>
+        </View>
+      </TouchableOpacity>
+    )}
+  </View>
+);
+
 const InputRow = ({
   label,
   value,
   onChange,
   tooltip,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   tooltip?: string;
+  disabled?: boolean;
 }) => (
-  <View style={styles.inputRow}>
-    <View style={{ flex: 2, flexDirection: "row", alignItems: "center" }}>
-      <Text style={{ fontSize: 14, color: "#333" }}>{label}</Text>
-      {tooltip && (
-        <TouchableOpacity
-          onPress={() => Alert.alert(label, tooltip)}
-          style={{ marginLeft: 8 }}
-        >
-          <View
-            style={{
-              width: 18,
-              height: 18,
-              borderRadius: 9,
-              backgroundColor: "#ddd",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text style={{ fontSize: 12, fontWeight: "bold", color: "#555" }}>
-              ?
-            </Text>
-          </View>
-        </TouchableOpacity>
-      )}
+  <View style={[styles.inputRow, disabled && { opacity: 0.5 }]}>
+    <LabelWithTooltip label={label} tooltip={tooltip} />
+    <View style={styles.controlWrapper}>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={onChange}
+        keyboardType="numeric"
+        placeholderTextColor="#999"
+        editable={!disabled}
+      />
     </View>
-    <TextInput
-      style={styles.input}
-      value={value}
-      onChangeText={onChange}
-      keyboardType="numeric"
-      placeholderTextColor="#999"
-    />
   </View>
 );
 
@@ -81,43 +147,133 @@ const Dropdown = ({
   value,
   options,
   onSelect,
+  disabled = false,
+  onToggle,
 }: {
   label: string;
   value: string;
   options: { label: string; value: string }[];
   onSelect: (v: string) => void;
+  disabled?: boolean;
+  onToggle?: (isOpen: boolean) => void;
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [menuLayout, setMenuLayout] = useState({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+  });
+  const buttonRef = useRef<any>(null);
+
+  const closeMenu = useCallback(() => {
+    setIsOpen(false);
+    onToggle?.(false);
+  }, [onToggle]);
+
+  const updateMenuLayout = useCallback(() => {
+    requestAnimationFrame(() => {
+      buttonRef.current?.measureInWindow(
+        (x: number, y: number, width: number, height: number) => {
+          setMenuLayout({ x, y: y + height, width, height });
+        },
+      );
+    });
+  }, []);
+
+  const openMenu = useCallback(() => {
+    if (disabled) return;
+    onToggle?.(true);
+    requestAnimationFrame(() => {
+      buttonRef.current?.measureInWindow(
+        (x: number, y: number, width: number, height: number) => {
+          setMenuLayout({ x, y: y + height, width, height });
+          setIsOpen(true);
+        },
+      );
+    });
+  }, [disabled, onToggle]);
+
+  const handleToggle = () => {
+    if (isOpen) {
+      closeMenu();
+      return;
+    }
+    openMenu();
+  };
+
+  const handleSelect = (val: string) => {
+    onSelect(val);
+    closeMenu();
+  };
 
   return (
-    <View style={[styles.inputRow, { zIndex: isOpen ? 1000 : 1 }]}>
-      <View style={{ flex: 2, flexDirection: "row", alignItems: "center" }}>
-        <Text style={{ fontSize: 14, color: "#333" }}>{label}</Text>
-      </View>
-      <View style={{ flex: 1 }}>
+    <View
+      style={[
+        styles.inputRow,
+        { zIndex: isOpen ? 1000 : 1, elevation: isOpen ? 50 : 0 },
+        disabled && { opacity: 0.5 },
+      ]}
+    >
+      {label ? (
+        <LabelWithTooltip label={label} />
+      ) : (
+        <View style={{ flex: 1 }} />
+      )}
+      <View style={styles.controlWrapper}>
         <TouchableOpacity
+          ref={buttonRef}
           style={styles.dropdownButton}
-          onPress={() => setIsOpen(!isOpen)}
+          onPress={() => !disabled && handleToggle()}
+          onLayout={updateMenuLayout}
+          disabled={disabled}
         >
-          <Text style={styles.dropdownButtonText}>
+          <Text style={styles.dropdownButtonText} numberOfLines={1}>
             {options.find((o) => o.value === value)?.label || value}
           </Text>
         </TouchableOpacity>
         {isOpen && (
-          <View style={styles.dropdownList}>
-            {options.map((opt) => (
-              <TouchableOpacity
-                key={opt.value}
-                style={styles.dropdownItem}
-                onPress={() => {
-                  onSelect(opt.value);
-                  setIsOpen(false);
-                }}
+          <Modal
+            transparent
+            animationType="fade"
+            visible={isOpen}
+            onRequestClose={closeMenu}
+          >
+            <View
+              style={styles.dropdownModalContainer}
+              pointerEvents="box-none"
+            >
+              <Pressable style={styles.dropdownBackdrop} onPress={closeMenu} />
+              <View
+                style={[
+                  styles.dropdownList,
+                  styles.dropdownModalList,
+                  {
+                    top: menuLayout.y,
+                    left: menuLayout.x,
+                    width: menuLayout.width || 140,
+                  },
+                ]}
               >
-                <Text style={styles.dropdownItemText}>{opt.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                <ScrollView
+                  style={{ maxHeight: 220 }}
+                  nestedScrollEnabled={true}
+                  keyboardShouldPersistTaps="always"
+                  persistentScrollbar={true}
+                >
+                  {options.map((opt) => (
+                    <TouchableOpacity
+                      key={opt.value}
+                      style={styles.dropdownItem}
+                      onPress={() => handleSelect(opt.value)}
+                    >
+                      <Text style={styles.dropdownItemText}>{opt.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
         )}
       </View>
     </View>
@@ -154,16 +310,20 @@ const DraggableMarker = ({
   const startPosRef = useRef({ x: 0, y: 0 });
   const propsRef = useRef({ x, y, scale, width, length, onDrag });
   propsRef.current = { x, y, scale, width, length, onDrag };
+  const isEditableRef = useRef(isEditable);
+  isEditableRef.current = isEditable;
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => isEditable,
-      onMoveShouldSetPanResponder: () => isEditable,
+      onStartShouldSetPanResponder: () => isEditableRef.current,
+      onMoveShouldSetPanResponder: () => isEditableRef.current,
       onPanResponderGrant: () => {
+        if (!isEditableRef.current) return;
         startPosRef.current = { x: propsRef.current.x, y: propsRef.current.y };
         onDragStart?.();
       },
       onPanResponderMove: (evt, gestureState) => {
+        if (!isEditableRef.current) return;
         const { scale, width, length, onDrag } = propsRef.current;
         if (scale === 0) return;
 
@@ -196,7 +356,6 @@ const DraggableMarker = ({
           borderWidth: 2,
           borderColor: "#fff",
           zIndex: 10,
-          elevation: 10,
         },
         style,
       ]}
@@ -206,34 +365,443 @@ const DraggableMarker = ({
   );
 };
 
-const FieldVisualization = ({
+// --- Types ---
+
+type TestMode = "standard" | "sweep";
+
+interface SweepConfig {
+  param: string;
+  min: string;
+  max: string;
+  step: string;
+  runsPerStep: string;
+}
+
+interface RunResult {
+  id: number;
+  params: any;
+  truePos: { x: number; y: number };
+  estPos: { x: number; y: number };
+  error: number;
+  rssiRmse: number;
+  duration: number;
+  iterations: number;
+  initialPopulation?: { x: number; y: number }[];
+  finalPopulation?: { x: number; y: number }[];
+  anchors: AnchorGeometry[];
+  measurements: BeaconMeasurement[];
+  modelType: string;
+  constants: PropagationConstants;
+  diagnostics?: any;
+}
+
+interface SweepStepResult {
+  val: number;
+  avgError: number;
+  stdDev: number;
+  avgIterations: number;
+  runs: RunResult[];
+}
+
+interface BatchAnalysis {
+  avgError: number;
+  stdDev: number;
+  rmse: number;
+  avgRssiRmse: number;
+  medianError: number;
+  minError: number;
+  maxError: number;
+  avgDuration: number;
+  avgIterations: number;
+  successRate1m: number;
+  successRate2m: number;
+  totalRuns: number;
+  bestRuns: RunResult[];
+}
+
+interface LogEntry {
+  timestamp: number;
+  message: string;
+}
+
+interface LogBatch {
+  id: number;
+  startTime: number;
+  entries: LogEntry[];
+  type: string;
+}
+
+const HeatmapOverlay = ({
   width,
   length,
-  anchors,
-  truePos,
-  estPos,
-  initialPopulation,
-  finalPopulation,
+  scale,
+  result,
+}: {
+  width: number;
+  length: number;
+  scale: number;
+  result: RunResult;
+}) => {
+  const resolution = 50; // 50x50 grid
+  const stepX = width / resolution;
+  const stepY = length / resolution;
+
+  const heatmapData = useMemo(() => {
+    if (!result) return null;
+
+    const data = [];
+    let minError = Infinity;
+    let maxError = -Infinity;
+
+    // Reconstruct model
+    let model;
+    if (result.modelType === "TwoRayGround") {
+      model = new TwoRayGroundModel();
+    } else {
+      model = new LogNormalModel();
+    }
+
+    for (let i = 0; i < resolution; i++) {
+      for (let j = 0; j < resolution; j++) {
+        const x = (i + 0.5) * stepX;
+        const y = (j + 0.5) * stepY;
+
+        let errorSum = 0;
+        let count = 0;
+
+        for (const m of result.measurements) {
+          const anchor = result.anchors.find((a) => a.mac === m.mac);
+          if (anchor) {
+            const dist = Math.sqrt((x - anchor.x) ** 2 + (y - anchor.y) ** 2);
+            const predictedRssi = model.estimateRssi({
+              distanceMeters: dist,
+              txPowerDbm: m.txPower || DEFAULT_TX_POWER_DBM,
+              constants: result.constants,
+            });
+            errorSum += (predictedRssi - m.filteredRssi) ** 2;
+            count++;
+          }
+        }
+
+        const rmse = count > 0 ? Math.sqrt(errorSum / count) : 0;
+        minError = Math.min(minError, rmse);
+        maxError = Math.max(maxError, rmse);
+
+        data.push({ x, y, error: rmse });
+      }
+    }
+
+    return { data, minError, maxError };
+  }, [result, stepX, stepY]);
+
+  if (!heatmapData) return null;
+
+  const { data, minError, maxError } = heatmapData;
+  const range = maxError - minError || 1;
+
+  const getColor = (error: number) => {
+    // Normalize 0-1
+    const t = (error - minError) / range;
+    // Purple (low error) to Yellow (high error)
+    // Purple: rgb(128, 0, 128) -> Yellow: rgb(255, 255, 0)
+    const r = Math.floor(128 + t * (255 - 128));
+    const g = Math.floor(0 + t * 255);
+    const b = Math.floor(128 + t * (0 - 128));
+    return `rgba(${r}, ${g}, ${b}, 0.6)`;
+  };
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      {data.map((cell, i) => (
+        <View
+          key={i}
+          style={{
+            position: "absolute",
+            left: (cell.x - stepX / 2) * scale,
+            top: (cell.y - stepY / 2) * scale,
+            width: stepX * scale,
+            height: stepY * scale,
+            backgroundColor: getColor(cell.error),
+          }}
+        />
+      ))}
+    </View>
+  );
+};
+
+const SweepGraph = ({
+  results,
+  paramName,
+  onSelectPoint,
+  selectedIndex,
+}: {
+  results: SweepStepResult[];
+  paramName: string;
+  onSelectPoint?: (index: number) => void;
+  selectedIndex?: number | null;
+}) => {
+  const [width, setWidth] = useState(0);
+  const data = useMemo(() => {
+    return [...results].sort((a, b) => a.val - b.val);
+  }, [results]);
+
+  if (data.length < 1) return null;
+
+  const minX = Math.min(...data.map((d) => d.val));
+  const maxX = Math.max(...data.map((d) => d.val));
+  const minY = 0;
+  const maxY =
+    Math.max(...data.map((d) => d.avgError + (d.stdDev || 0))) * 1.1 || 1;
+
+  const graphHeight = 200;
+  const graphWidth = width > 60 ? width - 60 : 0;
+
+  const getX = (x: number) =>
+    maxX === minX ? 0 : ((x - minX) / (maxX - minX)) * graphWidth;
+  const getY = (y: number) =>
+    graphHeight - ((y - minY) / (maxY - minY)) * graphHeight;
+
+  return (
+    <View
+      style={{ marginTop: 10, marginBottom: 30, paddingLeft: 40 }}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+    >
+      <Text
+        style={[
+          styles.resultText,
+          { fontWeight: "bold", marginBottom: 15, textAlign: "center" },
+        ]}
+      >
+        Error (m) vs {paramName}
+      </Text>
+      <View
+        style={{
+          height: graphHeight,
+          width: graphWidth,
+          borderLeftWidth: 1,
+          borderBottomWidth: 1,
+          borderColor: "#ccc",
+        }}
+      >
+        {/* Gridlines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+          <View
+            key={`grid-y-${t}`}
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: getY(t * maxY),
+              height: 1,
+              backgroundColor: "#eee",
+              zIndex: -1,
+            }}
+          />
+        ))}
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+          <View
+            key={`grid-x-${t}`}
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: getX(minX + t * (maxX - minX)),
+              width: 1,
+              backgroundColor: "#eee",
+              zIndex: -1,
+            }}
+          />
+        ))}
+
+        {/* Y-axis labels */}
+        <Text
+          style={{
+            position: "absolute",
+            left: -35,
+            top: 0,
+            fontSize: 10,
+            color: "#666",
+          }}
+        >
+          {maxY.toFixed(1)}
+        </Text>
+        <Text
+          style={{
+            position: "absolute",
+            left: -35,
+            bottom: 0,
+            fontSize: 10,
+            color: "#666",
+          }}
+        >
+          0
+        </Text>
+
+        {/* X-axis labels */}
+        <Text
+          style={{
+            position: "absolute",
+            left: 0,
+            bottom: -20,
+            fontSize: 10,
+            color: "#666",
+          }}
+        >
+          {minX.toFixed(1)}
+        </Text>
+        <Text
+          style={{
+            position: "absolute",
+            right: 0,
+            bottom: -20,
+            fontSize: 10,
+            color: "#666",
+          }}
+        >
+          {maxX.toFixed(1)}
+        </Text>
+
+        {/* Data Line */}
+        {data.length > 1 && (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {data.map((d, i) => {
+              if (i === 0) return null;
+              const prev = data[i - 1];
+              const x1 = getX(prev.val);
+              const y1 = getY(prev.avgError);
+              const x2 = getX(d.val);
+              const y2 = getY(d.avgError);
+              const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+              const angle = Math.atan2(y2 - y1, x2 - x1);
+
+              return (
+                <View
+                  key={`line-${i}`}
+                  style={{
+                    position: "absolute",
+                    left: x1,
+                    top: y1,
+                    width: length,
+                    height: 2,
+                    backgroundColor: ACCENT_COLOR,
+                    transform: [
+                      { translateX: 0 },
+                      { translateY: 0 },
+                      { rotate: `${angle}rad` },
+                    ],
+                    transformOrigin: "left center",
+                  }}
+                />
+              );
+            })}
+          </View>
+        )}
+
+        {/* Data Points & Error Bars */}
+        {data.map((d, i) => {
+          const x = getX(d.val);
+          const y = getY(d.avgError);
+          const isSelected = selectedIndex === i;
+
+          return (
+            <React.Fragment key={`point-group-${i}`}>
+              {/* Error Bar */}
+              {d.stdDev > 0 && (
+                <View
+                  style={{
+                    position: "absolute",
+                    left: x,
+                    top: getY(d.avgError + d.stdDev),
+                    width: 1,
+                    height:
+                      getY(d.avgError - d.stdDev) - getY(d.avgError + d.stdDev),
+                    backgroundColor: "#999",
+                    zIndex: 1,
+                  }}
+                >
+                  {/* Caps */}
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: -3,
+                      width: 7,
+                      height: 1,
+                      backgroundColor: "#999",
+                    }}
+                  />
+                  <View
+                    style={{
+                      position: "absolute",
+                      bottom: 0,
+                      left: -3,
+                      width: 7,
+                      height: 1,
+                      backgroundColor: "#999",
+                    }}
+                  />
+                </View>
+              )}
+
+              {/* Point */}
+              <TouchableOpacity
+                onPress={() => onSelectPoint?.(i)}
+                style={{
+                  position: "absolute",
+                  left: x - 5,
+                  top: y - 5,
+                  width: 10,
+                  height: 10,
+                  borderRadius: 5,
+                  backgroundColor: isSelected ? "#FF5722" : ACCENT_COLOR,
+                  borderWidth: isSelected ? 2 : 1,
+                  borderColor: "#fff",
+                  zIndex: 5,
+                }}
+                hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+              />
+            </React.Fragment>
+          );
+        })}
+      </View>
+    </View>
+  );
+};
+
+const Visualization = ({
+  width,
+  length,
+  result,
+  currentAnchors,
+  currentTruePos,
   onUpdateTruePos,
   onUpdateAnchor,
   isRandomTruePos,
   onDragStart,
   onDragEnd,
   isRunning,
+  showHeatmap,
+  onToggleHeatmap,
+  isSetup,
+  hideControls = false,
+  useWhiteBackground = false,
 }: {
   width: number;
   length: number;
-  anchors: AnchorGeometry[];
-  truePos: { x: number; y: number };
-  estPos?: { x: number; y: number };
-  initialPopulation?: { x: number; y: number }[];
-  finalPopulation?: { x: number; y: number }[];
+  result: RunResult | null;
+  currentAnchors: AnchorGeometry[];
+  currentTruePos: { x: number; y: number };
   onUpdateTruePos: (x: number, y: number) => void;
   onUpdateAnchor: (index: number, x: number, y: number) => void;
   isRandomTruePos: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   isRunning: boolean;
+  showHeatmap: boolean;
+  onToggleHeatmap: () => void;
+  isSetup: boolean;
+  hideControls?: boolean;
+  useWhiteBackground?: boolean;
 }) => {
   const [layout, setLayout] = useState({ width: 0, height: 0 });
   const [showPopulation, setShowPopulation] = useState(true);
@@ -245,24 +813,88 @@ const FieldVisualization = ({
   const scale = layout.width > 0 ? layout.width / width : 0;
   const viewHeight = length * scale;
 
+  // Use result data if available, otherwise fallback to current config
+  const anchors = result?.anchors || currentAnchors;
+  const truePos = result?.truePos || currentTruePos;
+  const estPos = result?.estPos;
+  const initialPopulation = result?.initialPopulation;
+  const finalPopulation = result?.finalPopulation;
+
   return (
-    <View style={styles.fieldContainer}>
+    <View style={useWhiteBackground && { backgroundColor: "#fff" }}>
+      {isSetup && !hideControls && (
+        <Text
+          style={{
+            fontSize: 12,
+            color: "#666",
+            marginBottom: 8,
+            textAlign: "center",
+          }}
+        >
+          Drag the markers to configure the field.
+        </Text>
+      )}
+      {!hideControls && (
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            minHeight: 20,
+            zIndex: 100,
+          }}
+        >
+          {!isSetup && !isRunning && (
+            <>
+              {result && (
+                <TouchableOpacity
+                  onPress={onToggleHeatmap}
+                  style={{
+                    marginRight: 15,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Text
+                    style={{
+                      color: ACCENT_COLOR,
+                      fontWeight: "600",
+                      fontSize: 12,
+                    }}
+                  >
+                    {showHeatmap ? "Hide Heatmap" : "Show Heatmap"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={() => setShowPopulation(!showPopulation)}
+                style={{
+                  paddingVertical: 8,
+                  paddingHorizontal: 12,
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Text
+                  style={{
+                    color: ACCENT_COLOR,
+                    fontWeight: "600",
+                    fontSize: 12,
+                  }}
+                >
+                  {showPopulation ? "Hide Population" : "Show Population"}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      )}
       <View
-        style={{
-          flexDirection: "row",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <Text style={styles.sectionTitle}>Field Visualization</Text>
-        <TouchableOpacity onPress={() => setShowPopulation(!showPopulation)}>
-          <Text style={{ color: ACCENT_COLOR }}>
-            {showPopulation ? "Hide Population" : "Show Population"}
-          </Text>
-        </TouchableOpacity>
-      </View>
-      <View
-        style={[styles.field, { height: viewHeight || 200 }]}
+        style={[
+          styles.field,
+          { height: viewHeight || 200, marginVertical: 15 },
+          useWhiteBackground && { backgroundColor: "#fff" },
+        ]}
         onLayout={onLayout}
       >
         {/* Grid Lines (5m intervals) */}
@@ -297,6 +929,16 @@ const FieldVisualization = ({
             />
           ))}
 
+        {/* Heatmap */}
+        {showHeatmap && result && scale > 0 && (
+          <HeatmapOverlay
+            width={width}
+            length={length}
+            scale={scale}
+            result={result}
+          />
+        )}
+
         {/* Initial Population */}
         {showPopulation &&
           initialPopulation?.map((p, i) => (
@@ -328,31 +970,32 @@ const FieldVisualization = ({
             onDrag={(x, y) => onUpdateAnchor(i, x, y)}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
-            isEditable={!isRunning}
-            style={{ zIndex: 10, elevation: 10 }}
+            isEditable={!isRunning && !result} // Only editable if not viewing a result
+            style={{ zIndex: 10 }}
           />
         ))}
 
         {/* True Position */}
-        <DraggableMarker
-          x={truePos.x}
-          y={truePos.y}
-          scale={scale}
-          width={width}
-          length={length}
-          color="#2e7d32"
-          size={16}
-          onDrag={onUpdateTruePos}
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
-          isEditable={!isRunning}
-          style={{
-            borderColor: isRandomTruePos ? "#fff" : "#000",
-            borderWidth: isRandomTruePos ? 2 : 3,
-            zIndex: 20,
-            elevation: 20,
-          }}
-        />
+        {(!isRandomTruePos || result) && (
+          <DraggableMarker
+            x={truePos.x}
+            y={truePos.y}
+            scale={scale}
+            width={width}
+            length={length}
+            color="#2e7d32"
+            size={16}
+            onDrag={onUpdateTruePos}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            isEditable={!isRunning && !result && !isRandomTruePos}
+            style={{
+              borderColor: "#fff",
+              borderWidth: 2,
+              zIndex: 20,
+            }}
+          />
+        )}
 
         {/* Estimated Position */}
         {estPos && (
@@ -368,7 +1011,6 @@ const FieldVisualization = ({
               borderWidth: 2,
               borderColor: "#fff",
               zIndex: 30,
-              elevation: 30,
             }}
           />
         )}
@@ -387,7 +1029,6 @@ const FieldVisualization = ({
                 borderRadius: 3,
                 backgroundColor: "rgba(255, 165, 0, 0.6)", // Orange
                 zIndex: 40,
-                elevation: 40,
               }}
             />
           ))}
@@ -401,51 +1042,118 @@ const FieldVisualization = ({
           />
           <Text style={styles.legendText}>Anchor</Text>
         </View>
-        <View style={styles.legendItem}>
-          <View
-            style={[styles.legendMarkerBase, { backgroundColor: "#2e7d32" }]}
-          />
-          <Text style={styles.legendText}>
-            True Position {isRandomTruePos ? "(Random)" : "(Drag)"}
-          </Text>
-        </View>
-        <View style={styles.legendItem}>
-          <View
-            style={[styles.legendMarkerBase, { backgroundColor: "#d32f2f" }]}
-          />
-          <Text style={styles.legendText}>Estimated Position</Text>
-        </View>
-        <View style={styles.legendItem}>
+        {(!isRandomTruePos || result) && (
+          <View style={styles.legendItem}>
+            <View
+              style={[styles.legendMarkerBase, { backgroundColor: "#2e7d32" }]}
+            />
+            <Text style={styles.legendText}>True Position</Text>
+          </View>
+        )}
+        {result && (
+          <>
+            <View style={styles.legendItem}>
+              <View
+                style={[
+                  styles.legendMarkerBase,
+                  { backgroundColor: "#d32f2f" },
+                ]}
+              />
+              <Text style={styles.legendText}>Estimated Position</Text>
+            </View>
+            {showPopulation && (
+              <>
+                <View style={styles.legendItem}>
+                  <View
+                    style={[
+                      styles.legendMarkerBase,
+                      {
+                        backgroundColor: "rgba(100, 100, 100, 0.3)",
+                        borderWidth: 0,
+                      },
+                    ]}
+                  />
+                  <Text style={styles.legendText}>Initial Population</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View
+                    style={[
+                      styles.legendMarkerBase,
+                      {
+                        backgroundColor: "rgba(255, 165, 0, 0.6)",
+                        borderWidth: 0,
+                      },
+                    ]}
+                  />
+                  <Text style={styles.legendText}>Final Population</Text>
+                </View>
+              </>
+            )}
+          </>
+        )}
+        {showHeatmap && result && (
           <View
             style={[
-              styles.legendMarkerBase,
-              { backgroundColor: "rgba(100, 100, 100, 0.3)" },
+              styles.legendItem,
+              { width: "100%", justifyContent: "center", marginTop: 10 },
             ]}
-          />
-          <Text style={styles.legendText}>Initial Population</Text>
-        </View>
-        <View style={styles.legendItem}>
-          <View
-            style={[
-              styles.legendMarkerBase,
-              { backgroundColor: "rgba(255, 165, 0, 0.6)" },
-            ]}
-          />
-          <Text style={styles.legendText}>Final Population</Text>
-        </View>
+          >
+            <Text style={[styles.legendText, { marginRight: 8 }]}>
+              Low Error
+            </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                height: 12,
+                width: 120,
+                borderRadius: 6,
+                overflow: "hidden",
+                borderWidth: 1,
+                borderColor: "#ddd",
+              }}
+            >
+              <View style={{ flex: 1, backgroundColor: "rgb(128, 0, 128)" }} />
+              <View style={{ flex: 1, backgroundColor: "rgb(160, 64, 96)" }} />
+              <View style={{ flex: 1, backgroundColor: "rgb(192, 128, 64)" }} />
+              <View style={{ flex: 1, backgroundColor: "rgb(224, 192, 32)" }} />
+              <View style={{ flex: 1, backgroundColor: "rgb(255, 255, 0)" }} />
+            </View>
+            <Text style={[styles.legendText, { marginLeft: 8 }]}>
+              High Error
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
 };
 export default function OptimizationTestScreen() {
   // Configuration State
-  const [fieldWidth, setFieldWidth] = useState(
+  const [inputWidth, setInputWidth] = useState(
     DEFAULT_FIELD_DIMENSIONS.widthMeters.toString(),
   );
-  const [fieldLength, setFieldLength] = useState(
+  const [inputLength, setInputLength] = useState(
     DEFAULT_FIELD_DIMENSIONS.lengthMeters.toString(),
   );
+  const [fieldWidth, setFieldWidth] = useState(
+    DEFAULT_FIELD_DIMENSIONS.widthMeters,
+  );
+  const [fieldLength, setFieldLength] = useState(
+    DEFAULT_FIELD_DIMENSIONS.lengthMeters,
+  );
+  const [fieldPreset, setFieldPreset] = useState("custom");
   const [numAnchors, setNumAnchors] = useState("8");
+
+  const handlePresetChange = useCallback((presetValue: string) => {
+    setFieldPreset(presetValue);
+    const preset = FIELD_PRESETS.find((p) => p.value === presetValue);
+    if (preset && presetValue !== "custom") {
+      setInputWidth(preset.width.toString());
+      setInputLength(preset.length.toString());
+      setFieldWidth(preset.width);
+      setFieldLength(preset.length);
+    }
+  }, []);
 
   const [txHeight, setTxHeight] = useState(
     DEFAULT_PROPAGATION_CONSTANTS.transmitterHeightMeters.toString(),
@@ -466,7 +1174,7 @@ export default function OptimizationTestScreen() {
     DEFAULT_PROPAGATION_CONSTANTS.reflectionCoefficient.toString(),
   );
 
-  const [timeBudget, setTimeBudget] = useState(
+  const [iterationTimeLimit, setIterationTimeLimit] = useState(
     DEFAULT_MFASA_OPTIONS.timeBudgetMs.toString(),
   ); // Default total time
   const [maxIterations, setMaxIterations] = useState(
@@ -487,7 +1195,15 @@ export default function OptimizationTestScreen() {
     DEFAULT_MFASA_OPTIONS.coolingRate.toString(),
   );
 
-  const [selectedModel, setSelectedModel] = useState("LogNormal");
+  // Simulation Noise State
+  const [baseSigma, setBaseSigma] = useState(
+    DEFAULT_SIMULATION_NOISE.baseSigma.toString(),
+  );
+  const [distanceSlope, setDistanceSlope] = useState(
+    DEFAULT_SIMULATION_NOISE.distanceSlope.toString(),
+  );
+
+  const [selectedModel, setSelectedModel] = useState("TwoRayGround");
   const [selectedAlgorithm, setSelectedAlgorithm] = useState("MFASA");
   const [selectedFilter, setSelectedFilter] = useState("Kalman");
 
@@ -499,43 +1215,69 @@ export default function OptimizationTestScreen() {
 
   // Anchor State
   const [anchorPlacementMode, setAnchorPlacementMode] = useState<
-    "random" | "border" | "grid"
+    "random" | "border" | "grid" | "evenly"
   >("border");
   const [currentAnchors, setCurrentAnchors] = useState<AnchorGeometry[]>([]);
 
+  // Test Execution State
+  const [testMode, setTestMode] = useState<TestMode>("standard");
   const [numRuns, setNumRuns] = useState("10");
-  const [batchResults, setBatchResults] = useState<{
-    avgError: number;
-    maxError: number;
-    minError: number;
-    stdDev: number;
-    avgTime: number;
-    runs: number;
-  } | null>(null);
+  const [sweepConfig, setSweepConfig] = useState<SweepConfig>({
+    param: "populationSize",
+    min: "10",
+    max: "100",
+    step: "10",
+    runsPerStep: "5",
+  });
+  const [sweepResults, setSweepResults] = useState<SweepStepResult[]>([]);
+  const [selectedSweepIndex, setSelectedSweepIndex] = useState<number | null>(
+    null,
+  );
 
-  const [logs, setLogs] = useState<string[]>([]);
-  const [showLogs, setShowLogs] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const [lastResult, setLastResult] = useState<string | null>(null);
-  const [lastEstPos, setLastEstPos] = useState<
-    { x: number; y: number } | undefined
-  >(undefined);
-  const [initialPopulation, setInitialPopulation] = useState<
-    { x: number; y: number }[] | undefined
-  >(undefined);
-  const [finalPopulation, setFinalPopulation] = useState<
-    { x: number; y: number }[] | undefined
-  >(undefined);
+  const [progress, setProgress] = useState(0);
+  const [logBatches, setLogBatches] = useState<LogBatch[]>([]);
+  const isCancelledRef = useRef(false);
+  const currentOptimizerRef = useRef<MFASAOptimizer | null>(null);
 
+  // Results State
+  const [results, setResults] = useState<RunResult[]>([]);
+  const [batchAnalysis, setBatchAnalysis] = useState<BatchAnalysis | null>(
+    null,
+  );
+  const [selectedResultIndex, setSelectedResultIndex] = useState<number>(0);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [useWhiteBackground, setUseWhiteBackground] = useState(true);
+
+  const [viewMode, setViewMode] = useState<"config" | "results">("config");
   const [scrollEnabled, setScrollEnabled] = useState(true);
+  const visualizationRef = useRef<View>(null);
 
   const addLog = (msg: string) => {
-    setLogs((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
+    const entry: LogEntry = { timestamp: Date.now(), message: msg };
+    setLogBatches((prev) => {
+      if (prev.length === 0) return prev;
+      const newBatches = [...prev];
+      newBatches[0] = {
+        ...newBatches[0],
+        entries: [entry, ...newBatches[0].entries],
+      };
+      return newBatches;
+    });
   };
 
+  const cancelTest = useCallback(() => {
+    isCancelledRef.current = true;
+    if (currentOptimizerRef.current) {
+      currentOptimizerRef.current.cancel();
+    }
+    addLog("Cancelling test...");
+  }, []);
+
   const generateAnchors = useCallback(() => {
-    const w = parseFloat(fieldWidth) || DEFAULT_FIELD_DIMENSIONS.widthMeters;
-    const l = parseFloat(fieldLength) || DEFAULT_FIELD_DIMENSIONS.lengthMeters;
+    const w = fieldWidth;
+    const l = fieldLength;
     const n = parseInt(numAnchors) || 8;
 
     const newAnchors: AnchorGeometry[] = [];
@@ -550,18 +1292,67 @@ export default function OptimizationTestScreen() {
       }
     } else if (anchorPlacementMode === "grid") {
       const ratio = l / w;
-      const cols = Math.ceil(Math.sqrt(n / ratio));
-      const rows = Math.ceil(n / cols);
+      let cols = Math.max(1, Math.round(Math.sqrt(n / ratio)));
+      let rows = Math.ceil(n / cols);
+
+      // Adjust to minimize empty cells if possible
+      if (cols * (rows - 1) >= n) {
+        rows--;
+      }
+
       const stepX = w / cols;
       const stepY = l / rows;
 
       for (let i = 0; i < n; i++) {
         const r = Math.floor(i / cols);
         const c = i % cols;
-        // Center in the grid cell
-        const x = (c + 0.5) * stepX;
+
+        // Center the last row if it's not full
+        const numInRow = r === rows - 1 ? n % cols || cols : cols;
+        const rowOffset = ((cols - numInRow) * stepX) / 2;
+
+        const x = (c + 0.5) * stepX + rowOffset;
         const y = (r + 0.5) * stepY;
-        // Clamp to field
+
+        newAnchors.push({
+          mac: `00:11:22:33:44:0${i}`,
+          x: Math.min(w, Math.max(0, x)),
+          y: Math.min(l, Math.max(0, y)),
+        });
+      }
+    } else if (anchorPlacementMode === "evenly") {
+      // Evenly spaced grid including boundaries
+      const ratio = l / w;
+      let cols = Math.max(2, Math.round(Math.sqrt(n / ratio)));
+      let rows = Math.ceil(n / cols);
+
+      // Adjust to fit n better
+      if (cols * (rows - 1) >= n && rows > 2) {
+        rows--;
+      }
+
+      const stepX = cols > 1 ? w / (cols - 1) : 0;
+      const stepY = rows > 1 ? l / (rows - 1) : 0;
+
+      for (let i = 0; i < n; i++) {
+        const r = Math.floor(i / cols);
+        const c = i % cols;
+
+        // If we have a "hole" in the middle (like 8 anchors in 3x3),
+        // we can skip the center point to keep it symmetric
+        let finalC = c;
+        let finalR = r;
+
+        // Special case for 8 in 3x3 to skip center
+        if (n === 8 && cols === 3 && rows === 3 && i >= 4) {
+          const adjustedIdx = i + 1;
+          finalR = Math.floor(adjustedIdx / cols);
+          finalC = adjustedIdx % cols;
+        }
+
+        const x = finalC * stepX;
+        const y = finalR * stepY;
+
         newAnchors.push({
           mac: `00:11:22:33:44:0${i}`,
           x: Math.min(w, Math.max(0, x)),
@@ -599,24 +1390,18 @@ export default function OptimizationTestScreen() {
     setCurrentAnchors(newAnchors);
   }, [fieldWidth, fieldLength, numAnchors, anchorPlacementMode]);
 
+  // Initial generation only if empty
   useEffect(() => {
-    generateAnchors();
-  }, [generateAnchors]);
+    if (currentAnchors.length === 0) {
+      generateAnchors();
+    }
+  }, [generateAnchors, currentAnchors.length]);
 
   const performSimulation = useCallback(
-    async (
-      runIndex: number,
-      totalRuns: number,
-    ): Promise<{
-      errorDist: number;
-      duration: number;
-      result: any;
-      trueX: number;
-      trueY: number;
-    }> => {
-      // Parse Config
-      const width = parseFloat(fieldWidth) || 100;
-      const length = parseFloat(fieldLength) || 100;
+    async (runId: number, paramOverrides: any = {}): Promise<RunResult> => {
+      // Parse Config (Base)
+      const width = fieldWidth;
+      const length = fieldLength;
 
       const constants: PropagationConstants = {
         transmitterHeightMeters:
@@ -643,21 +1428,25 @@ export default function OptimizationTestScreen() {
         yMax: length,
       };
 
-      const tBudget =
-        parseFloat(timeBudget) || DEFAULT_MFASA_OPTIONS.timeBudgetMs;
-      const maxIter =
-        parseInt(maxIterations) || DEFAULT_MFASA_OPTIONS.maxIterations;
-      const popSize =
-        parseInt(populationSize) || DEFAULT_MFASA_OPTIONS.populationSize;
-      const b0 = parseFloat(beta0) || DEFAULT_MFASA_OPTIONS.beta0;
-      const gamma =
-        parseFloat(lightAbsorption) || DEFAULT_MFASA_OPTIONS.lightAbsorption;
-      const alp = parseFloat(alpha) || DEFAULT_MFASA_OPTIONS.alpha;
-      const initTemp =
-        parseFloat(initialTemperature) ||
-        DEFAULT_MFASA_OPTIONS.initialTemperature;
-      const coolRate =
-        parseFloat(coolingRate) || DEFAULT_MFASA_OPTIONS.coolingRate;
+      // Merge base params with overrides
+      const params = {
+        iterationTimeLimitMs:
+          parseFloat(iterationTimeLimit) || DEFAULT_MFASA_OPTIONS.timeBudgetMs,
+        maxIterations:
+          parseInt(maxIterations) || DEFAULT_MFASA_OPTIONS.maxIterations,
+        populationSize:
+          parseInt(populationSize) || DEFAULT_MFASA_OPTIONS.populationSize,
+        beta0: parseFloat(beta0) || DEFAULT_MFASA_OPTIONS.beta0,
+        lightAbsorption:
+          parseFloat(lightAbsorption) || DEFAULT_MFASA_OPTIONS.lightAbsorption,
+        alpha: parseFloat(alpha) || DEFAULT_MFASA_OPTIONS.alpha,
+        initialTemperature:
+          parseFloat(initialTemperature) ||
+          DEFAULT_MFASA_OPTIONS.initialTemperature,
+        coolingRate:
+          parseFloat(coolingRate) || DEFAULT_MFASA_OPTIONS.coolingRate,
+        ...paramOverrides,
+      };
 
       // 1. Setup Model
       let model;
@@ -668,59 +1457,37 @@ export default function OptimizationTestScreen() {
       }
 
       // 2. Setup Optimizer
-      let optimizer;
-      if (selectedAlgorithm === "MFASA") {
-        optimizer = new MFASAOptimizer({
-          totalTimeLimitMs: tBudget,
-          maxIterations: maxIter,
-          populationSize: popSize,
-          beta0: b0,
-          lightAbsorption: gamma,
-          alpha: alp,
-          initialTemperature: initTemp,
-          coolingRate: coolRate,
-        });
-      } else {
-        optimizer = new MFASAOptimizer({
-          totalTimeLimitMs: tBudget,
-          maxIterations: maxIter,
-        });
-      }
+      const optimizer = new MFASAOptimizer({
+        timeBudgetMs: 10, // Fixed per-slice budget for UI responsiveness
+        iterationTimeLimitMs: params.iterationTimeLimitMs,
+        maxIterations: params.maxIterations,
+        populationSize: params.populationSize,
+        beta0: params.beta0,
+        lightAbsorption: params.lightAbsorption,
+        alpha: params.alpha,
+        initialTemperature: params.initialTemperature,
+        coolingRate: params.coolingRate,
+      });
+      currentOptimizerRef.current = optimizer;
 
       // 3. Generate Scenario
       let trueX, trueY;
       if (isRandomTruePos) {
         trueX = Math.random() * width;
         trueY = Math.random() * length;
-        // Only update UI state on the first run to avoid flickering
-        if (runIndex === 0) {
-          setCurrentTruePos({ x: trueX, y: trueY });
-          setManualTrueX(trueX.toFixed(2));
-          setManualTrueY(trueY.toFixed(2));
-        }
       } else {
         trueX = parseFloat(manualTrueX) || width / 2;
         trueY = parseFloat(manualTrueY) || length / 2;
-        if (runIndex === 0) {
-          setCurrentTruePos({ x: trueX, y: trueY });
-        }
-      }
-
-      if (runIndex === 0) {
-        addLog(`True Position: (${trueX.toFixed(2)}, ${trueY.toFixed(2)})`);
       }
 
       const candidates: BeaconMeasurement[] = [];
-      const SAMPLE_COUNT = 20; // Simulate receiving 20 packets
+      const SAMPLE_COUNT = 20;
 
       // Use currentAnchors state
       currentAnchors.forEach((anchor) => {
-        // Calculate true distance
         const dist = Math.sqrt(
           (trueX - anchor.x) ** 2 + (trueY - anchor.y) ** 2,
         );
-
-        // Calculate RSSI using the model
         const txPower = DEFAULT_TX_POWER_DBM;
         const trueRssi = model.estimateRssi({
           distanceMeters: dist,
@@ -728,24 +1495,23 @@ export default function OptimizationTestScreen() {
           constants: constants,
         });
 
-        // Initialize Kalman Filter for this anchor
-        // Process noise 0.01, Measurement noise 4.0 (standard deviation of RSSI noise ~2dBm)
+        // Scientifically realistic noise: standard deviation increases with distance.
+        const bSigma = parseFloat(baseSigma) || 0;
+        const dSlope = parseFloat(distanceSlope) || 0;
+        const sigma = bSigma + dSlope * dist;
+
         const kf = new KalmanFilter({
-          processNoise: 0.01,
-          measurementNoise: 4.0,
+          processNoise: DEFAULT_KALMAN_CONFIG.processNoise,
+          measurementNoise: sigma ** 2,
         });
 
         let filteredRssi = trueRssi;
-
-        // Simulate a stream of noisy packets
         for (let i = 0; i < SAMPLE_COUNT; i++) {
-          // Simple Gaussian noise approximation
           const u1 = Math.random();
           const u2 = Math.random();
           const z =
             Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-          const noise = z * 2.0; // Standard deviation of 2.0 dBm
-
+          const noise = z * sigma;
           const noisyRssi = trueRssi + noise;
           filteredRssi = kf.filterSample(noisyRssi);
         }
@@ -758,12 +1524,6 @@ export default function OptimizationTestScreen() {
         });
       });
 
-      if (runIndex === 0) {
-        addLog(
-          `Using ${currentAnchors.length} anchors. Simulated ${SAMPLE_COUNT} packets per anchor.`,
-        );
-      }
-
       // 4. Run Optimizer
       const startTime = performance.now();
       const result = await optimizer.solve({
@@ -772,17 +1532,32 @@ export default function OptimizationTestScreen() {
         propagation: model,
         constants: constants,
         bounds: bounds,
-        totalTimeLimitMs: tBudget,
+        iterationTimeLimitMs: params.iterationTimeLimitMs,
       });
       const endTime = performance.now();
       const duration = endTime - startTime;
 
-      // 5. Report Results
       const errorDist = Math.sqrt(
         (result.x - trueX) ** 2 + (result.y - trueY) ** 2,
       );
 
-      return { errorDist, duration, result, trueX, trueY };
+      return {
+        id: runId,
+        params,
+        truePos: { x: trueX, y: trueY },
+        estPos: { x: result.x, y: result.y },
+        error: errorDist,
+        rssiRmse: result.errorRmse,
+        duration,
+        iterations: result.iterations,
+        initialPopulation: result.diagnostics?.initialPopulation,
+        finalPopulation: result.diagnostics?.finalPopulation,
+        anchors: [...currentAnchors], // Snapshot
+        measurements: candidates,
+        modelType: selectedModel,
+        constants,
+        diagnostics: result.diagnostics,
+      };
     },
     [
       fieldWidth,
@@ -793,7 +1568,7 @@ export default function OptimizationTestScreen() {
       txGain,
       rxGain,
       refCoeff,
-      timeBudget,
+      iterationTimeLimit,
       maxIterations,
       populationSize,
       beta0,
@@ -802,443 +1577,1255 @@ export default function OptimizationTestScreen() {
       initialTemperature,
       coolingRate,
       selectedModel,
-      selectedAlgorithm,
       isRandomTruePos,
       manualTrueX,
       manualTrueY,
       currentAnchors,
+      baseSigma,
+      distanceSlope,
     ],
   );
 
-  const runTest = useCallback(async () => {
+  const runOptimizationTest = useCallback(async () => {
     setIsRunning(true);
-    // setLastResult(null);
-    // setLastEstPos(undefined);
-    // setBatchResults(null);
-    addLog("Starting Optimization Test...");
+    isCancelledRef.current = false;
+
+    const newBatch: LogBatch = {
+      id: Date.now(),
+      startTime: Date.now(),
+      entries: [],
+      type: testMode === "standard" ? "Standard" : "Sweep",
+    };
+    setLogBatches((prev) => [newBatch, ...prev]);
+
+    setResults([]);
+    setProgress(0);
+    setViewMode("results");
+
+    const settingsLog = `Test Configuration:
+Mode: ${testMode}
+Runs: ${numRuns}
+Field: ${fieldWidth}m x ${fieldLength}m
+Anchors: ${numAnchors} (${anchorPlacementMode})
+Model: ${selectedModel}
+Algorithm: ${selectedAlgorithm}
+Filter: ${selectedFilter}
+
+Propagation Constants:
+Tx Height: ${txHeight}m
+Rx Height: ${rxHeight}m
+Frequency: ${freq}Hz
+Tx Gain: ${txGain}
+Rx Gain: ${rxGain}
+Reflection Coeff: ${refCoeff}
+
+MFASA Options:
+Time Limit: ${iterationTimeLimit}ms
+Max Iterations: ${maxIterations}
+Population: ${populationSize}
+Beta0: ${beta0}
+Light Absorption: ${lightAbsorption}
+Alpha: ${alpha}
+Initial Temp: ${initialTemperature}
+Cooling Rate: ${coolingRate}
+
+Simulation Noise:
+Base Sigma: ${baseSigma}
+Distance Slope: ${distanceSlope}
+
+True Position: ${isRandomTruePos ? "Random" : `Fixed (${manualTrueX}, ${manualTrueY})`}`;
+
+    addLog(settingsLog);
+    addLog(
+      `Starting ${testMode === "standard" ? "Standard" : "Sweep"} Test...`,
+    );
 
     try {
-      const { errorDist, duration, result, trueX, trueY } =
-        await performSimulation(0, 1);
+      const newResults: RunResult[] = [];
+      const newSweepResults: SweepStepResult[] = [];
 
-      setLastEstPos({ x: result.x, y: result.y });
-      setInitialPopulation(result.diagnostics?.initialPopulation);
-      setFinalPopulation(result.diagnostics?.finalPopulation);
+      if (testMode === "standard") {
+        const n = parseInt(numRuns) || 10;
+        for (let i = 0; i < n; i++) {
+          if (isCancelledRef.current) break;
+          await new Promise((resolve) => setTimeout(resolve, 0)); // Yield
+          const res = await performSimulation(i + 1);
+          newResults.push(res);
 
-      const resultMsg = `
-Time: ${duration.toFixed(2)}ms
-True: (${trueX.toFixed(2)}, ${trueY.toFixed(2)})
-Est: (${result.x.toFixed(2)}, ${result.y.toFixed(2)})
-Error: ${errorDist.toFixed(2)}m
-Evaluations: ${result.diagnostics?.evaluations ?? "N/A"}
-Initial Error (RMSE): ${result.diagnostics?.initialError.toFixed(2) ?? "N/A"}
-Final Error (RMSE): ${result.diagnostics?.finalError.toFixed(2) ?? "N/A"}
-      `.trim();
+          const runLog = `Run ${i + 1}:
+Error: ${res.error.toFixed(2)}m
+RSSI RMSE: ${res.rssiRmse.toFixed(2)}
+Time: ${res.duration.toFixed(2)}ms
+Iterations: ${res.iterations}
+Est Pos: (${res.estPos.x.toFixed(2)}, ${res.estPos.y.toFixed(2)})
+${isRandomTruePos ? `True Pos: (${res.truePos.x.toFixed(2)}, ${res.truePos.y.toFixed(2)})` : ""}`;
 
-      setLastResult(resultMsg);
-      addLog(
-        `Test Complete. Duration: ${duration.toFixed(
-          2,
-        )}ms. Error: ${errorDist.toFixed(2)}m\n${resultMsg}`,
-      );
-    } catch (e: any) {
-      addLog(`Error: ${e.message}`);
-      console.error(e);
-    } finally {
-      setIsRunning(false);
-    }
-  }, [performSimulation]);
+          addLog(runLog);
+          setProgress((i + 1) / n);
+        }
+      } else {
+        // Sweep Mode
+        const min = parseFloat(sweepConfig.min);
+        const max = parseFloat(sweepConfig.max);
+        const step = parseFloat(sweepConfig.step);
+        const runsPerStep = parseInt(sweepConfig.runsPerStep) || 1;
+        const paramName = sweepConfig.param;
 
-  const runBatchTest = useCallback(async () => {
-    const n = parseInt(numRuns) || 10;
-    if (n <= 0) return;
+        if (isNaN(min) || isNaN(max) || isNaN(step) || step <= 0) {
+          throw new Error("Invalid sweep configuration");
+        }
 
-    setIsRunning(true);
-    // setLastResult(null);
-    // setLastEstPos(undefined);
-    // setBatchResults(null);
-    addLog(`Starting Batch Test (${n} runs)...`);
+        let val = min;
+        let stepIdx = 0;
+        const steps = Math.floor((max - min) / step) + 1;
+        const totalRuns = steps * runsPerStep;
 
-    const errors: number[] = [];
-    const times: number[] = [];
+        while (val <= max + 0.00001) {
+          if (isCancelledRef.current) break;
 
-    try {
-      for (let i = 0; i < n; i++) {
-        // Allow UI to update
-        await new Promise((resolve) => setTimeout(resolve, 0));
+          const stepRuns: RunResult[] = [];
+          for (let r = 0; r < runsPerStep; r++) {
+            if (isCancelledRef.current) break;
+            await new Promise((resolve) => setTimeout(resolve, 0)); // Yield
+            const overrides = { [paramName]: val };
+            const res = await performSimulation(
+              stepIdx * runsPerStep + r + 1,
+              overrides,
+            );
+            stepRuns.push(res);
+            newResults.push(res);
+            addLog(
+              `Step ${stepIdx + 1}, Run ${r + 1} (${paramName}=${val.toFixed(2)}):
+Error: ${res.error.toFixed(2)}m
+RSSI RMSE: ${res.rssiRmse.toFixed(2)}
+Iterations: ${res.iterations}`,
+            );
+            setProgress((stepIdx * runsPerStep + r + 1) / totalRuns);
+          }
 
-        const { errorDist, duration, result } = await performSimulation(i, n);
-        errors.push(errorDist);
-        times.push(duration);
+          const avgError =
+            stepRuns.reduce((acc, curr) => acc + curr.error, 0) /
+            stepRuns.length;
+          const avgIterations =
+            stepRuns.reduce((acc, curr) => acc + curr.iterations, 0) /
+            stepRuns.length;
+          const stdDev =
+            stepRuns.length > 1
+              ? Math.sqrt(
+                  stepRuns.reduce(
+                    (acc, curr) => acc + Math.pow(curr.error - avgError, 2),
+                    0,
+                  ) / stepRuns.length,
+                )
+              : 0;
 
-        addLog(
-          `Run ${i + 1}/${n}: Error=${errorDist.toFixed(
-            2,
-          )}m, Time=${duration.toFixed(2)}ms, Est=(${result.x.toFixed(
-            2,
-          )}, ${result.y.toFixed(2)})`,
-        );
+          newSweepResults.push({
+            val,
+            avgError,
+            stdDev,
+            avgIterations,
+            runs: stepRuns,
+          });
 
-        if (i === n - 1) {
-          // Update visualization for the last run
-          setLastEstPos({ x: result.x, y: result.y });
-          setInitialPopulation(result.diagnostics?.initialPopulation);
-          setFinalPopulation(result.diagnostics?.finalPopulation);
+          val += step;
+          stepIdx++;
         }
       }
 
+      if (isCancelledRef.current) {
+        addLog("Test cancelled by user.");
+      }
+
+      setResults(newResults);
+      setSweepResults(newSweepResults);
+      setSelectedResultIndex(0);
+      setSelectedSweepIndex(null);
+
+      // Summary Stats & Analysis
+      const errors = newResults.map((r) => r.error);
+      const durations = newResults.map((r) => r.duration);
+      const iterations = newResults.map((r) => r.iterations);
+      const n = errors.length;
+
+      if (n === 0) {
+        setBatchAnalysis(null);
+        return;
+      }
+
       const avgError = errors.reduce((a, b) => a + b, 0) / n;
-      const maxError = Math.max(...errors);
+      const avgDuration = durations.reduce((a, b) => a + b, 0) / n;
+      const avgIterations = iterations.reduce((a, b) => a + b, 0) / n;
       const minError = Math.min(...errors);
-      const avgTime = times.reduce((a, b) => a + b, 0) / n;
+      const maxError = Math.max(...errors);
 
-      // Calculate Standard Deviation
-      const variance = errors.reduce((a, b) => a + (b - avgError) ** 2, 0) / n;
-      const stdDev = Math.sqrt(variance);
-
-      setBatchResults({
-        avgError,
-        maxError,
-        minError,
-        stdDev,
-        avgTime,
-        runs: n,
-      });
-
-      addLog(
-        `Batch Complete. Avg Error: ${avgError.toFixed(
-          2,
-        )}m, Max: ${maxError.toFixed(2)}m`,
+      // RMSE
+      const rmse = Math.sqrt(
+        errors.reduce((acc, val) => acc + val * val, 0) / n,
       );
+
+      // Avg RSSI RMSE
+      const avgRssiRmse =
+        newResults.reduce((acc, r) => acc + r.rssiRmse, 0) / n;
+
+      // Standard Deviation
+      const stdDev = Math.sqrt(
+        errors.reduce((acc, val) => acc + Math.pow(val - avgError, 2), 0) / n,
+      );
+
+      // Median
+      const sortedErrors = [...errors].sort((a, b) => a - b);
+      const medianError =
+        n % 2 === 0
+          ? (sortedErrors[n / 2 - 1] + sortedErrors[n / 2]) / 2
+          : sortedErrors[Math.floor(n / 2)];
+
+      // Success Rates
+      const successRate1m = (errors.filter((e) => e < 1).length / n) * 100;
+      const successRate2m = (errors.filter((e) => e < 2).length / n) * 100;
+
+      // Best Runs
+      const bestRuns = [...newResults]
+        .sort((a, b) => a.error - b.error)
+        .slice(0, 5);
+
+      const analysis: BatchAnalysis = {
+        avgError,
+        stdDev,
+        rmse,
+        avgRssiRmse,
+        medianError,
+        minError,
+        maxError,
+        avgDuration,
+        avgIterations,
+        successRate1m,
+        successRate2m,
+        totalRuns: n,
+        bestRuns,
+      };
+
+      setBatchAnalysis(analysis);
+
+      addLog(`Batch Analysis:
+Avg Error: ${avgError.toFixed(3)}m
+Position RMSE: ${rmse.toFixed(3)}m
+Avg RSSI RMSE: ${avgRssiRmse.toFixed(3)}
+Std Dev: ${stdDev.toFixed(3)}m
+Median: ${medianError.toFixed(3)}m
+Avg Iterations: ${avgIterations.toFixed(1)}
+Min/Max: ${minError.toFixed(3)}m / ${maxError.toFixed(3)}m
+Avg Time: ${avgDuration.toFixed(2)}ms
+Success <1m: ${successRate1m.toFixed(1)}%
+Success <2m: ${successRate2m.toFixed(1)}%`);
     } catch (e: any) {
-      addLog(`Batch Error: ${e.message}`);
-      console.error(e);
+      if (e.message !== "Cancelled") {
+        addLog(`Error: ${e.message}`);
+        console.error(e);
+      }
     } finally {
       setIsRunning(false);
     }
-  }, [numRuns, performSimulation]);
+  }, [
+    testMode,
+    numRuns,
+    sweepConfig,
+    performSimulation,
+    fieldWidth,
+    fieldLength,
+    numAnchors,
+    anchorPlacementMode,
+    selectedModel,
+    selectedAlgorithm,
+    selectedFilter,
+    txHeight,
+    rxHeight,
+    freq,
+    txGain,
+    rxGain,
+    refCoeff,
+    iterationTimeLimit,
+    maxIterations,
+    populationSize,
+    beta0,
+    lightAbsorption,
+    alpha,
+    initialTemperature,
+    coolingRate,
+    baseSigma,
+    distanceSlope,
+    isRandomTruePos,
+    manualTrueX,
+    manualTrueY,
+  ]);
+
+  const selectedResult = results[selectedResultIndex] || null;
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollContainer} scrollEnabled={scrollEnabled}>
+      <ScrollView
+        style={styles.scrollContainer}
+        scrollEnabled={scrollEnabled}
+        nestedScrollEnabled={true}
+      >
         <View style={styles.header}>
+          <TouchableOpacity
+            style={[
+              styles.backButton,
+              { opacity: viewMode === "results" && !isRunning ? 1 : 0 },
+            ]}
+            onPress={() => {
+              if (viewMode === "results") {
+                setViewMode("config");
+                setResults([]);
+              }
+            }}
+            disabled={viewMode !== "results" || isRunning}
+          >
+            <Text style={styles.backButtonText}>←</Text>
+          </TouchableOpacity>
           <Text style={styles.title}>Optimization Test</Text>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Configuration</Text>
-          <Dropdown
-            label="Model"
-            value={selectedModel}
-            options={[
-              { label: "Log Normal", value: "LogNormal" },
-              { label: "Two Ray Ground", value: "TwoRayGround" },
+          <View
+            style={[
+              styles.sectionHeader,
+              { flexWrap: "wrap", paddingVertical: 8 },
             ]}
-            onSelect={setSelectedModel}
-          />
-          <Dropdown
-            label="Algorithm"
-            value={selectedAlgorithm}
-            options={[{ label: "MFASA", value: "MFASA" }]}
-            onSelect={setSelectedAlgorithm}
-          />
-          <Dropdown
-            label="RSSI Filter"
-            value={selectedFilter}
-            options={[{ label: "Kalman", value: "Kalman" }]}
-            onSelect={setSelectedFilter}
-          />
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>True Position</Text>
-          <TouchableOpacity
-            style={styles.checkboxRow}
-            onPress={() => setIsRandomTruePos(!isRandomTruePos)}
           >
-            <View
+            <Text
               style={[
-                styles.checkbox,
-                isRandomTruePos && styles.checkboxChecked,
+                styles.sectionTitle,
+                { marginRight: 10, flexShrink: 1, minWidth: 120 },
               ]}
+              numberOfLines={1}
             >
-              {isRandomTruePos && (
-                <Text style={{ color: "#fff", fontSize: 12 }}>✓</Text>
-              )}
-            </View>
-            <Text style={styles.inputLabel}>Randomly Select True Position</Text>
-          </TouchableOpacity>
-
-          {!isRandomTruePos && (
-            <>
-              <InputRow
-                label="True X (m)"
-                value={manualTrueX}
-                onChange={(v) => {
-                  setManualTrueX(v);
-                  setCurrentTruePos((p) => ({ ...p, x: parseFloat(v) || 0 }));
+              Visualization
+            </Text>
+            {!isRunning && (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  flexShrink: 0,
+                  marginVertical: 4,
                 }}
-              />
-              <InputRow
-                label="True Y (m)"
-                value={manualTrueY}
-                onChange={(v) => {
-                  setManualTrueY(v);
-                  setCurrentTruePos((p) => ({ ...p, y: parseFloat(v) || 0 }));
-                }}
-              />
-            </>
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Field & Anchors</Text>
-          <InputRow
-            label="Width (m)"
-            value={fieldWidth}
-            onChange={setFieldWidth}
-          />
-          <InputRow
-            label="Length (m)"
-            value={fieldLength}
-            onChange={setFieldLength}
-          />
-          <InputRow
-            label="Number of Anchors"
-            value={numAnchors}
-            onChange={setNumAnchors}
-          />
-          <Dropdown
-            label="Anchor Placement"
-            value={anchorPlacementMode}
-            options={[
-              { label: "Border", value: "border" },
-              { label: "Grid", value: "grid" },
-              { label: "Random", value: "random" },
-            ]}
-            onSelect={(v) => setAnchorPlacementMode(v as any)}
-          />
-
-          <Text style={styles.sectionTitle}>Propagation Constants</Text>
-          <InputRow
-            label="Transmitter Height (m)"
-            value={txHeight}
-            onChange={setTxHeight}
-            tooltip="Height of the beacon from the ground. Affects ground reflection path."
-          />
-          <InputRow
-            label="Receiver Height (m)"
-            value={rxHeight}
-            onChange={setRxHeight}
-            tooltip="Height of the phone from the ground. Affects ground reflection path."
-          />
-          <InputRow
-            label="Frequency (Hz)"
-            value={freq}
-            onChange={setFreq}
-            tooltip="Signal frequency (usually 2.4GHz for BLE). Affects wavelength and path loss."
-          />
-          <InputRow
-            label="Transmitter Gain"
-            value={txGain}
-            onChange={setTxGain}
-            tooltip="Antenna gain of the beacon (linear scale)."
-          />
-          <InputRow
-            label="Receiver Gain"
-            value={rxGain}
-            onChange={setRxGain}
-            tooltip="Antenna gain of the phone (linear scale)."
-          />
-          <InputRow
-            label="Reflection Coefficient"
-            value={refCoeff}
-            onChange={setRefCoeff}
-            tooltip="How much signal is reflected by the ground (0-1). 1 means perfect reflection."
-          />
-
-          <Text style={styles.sectionTitle}>Optimizer</Text>
-          <InputRow
-            label="Total Time Limit (ms)"
-            value={timeBudget}
-            onChange={setTimeBudget}
-            tooltip="Maximum time allowed for the optimization process."
-          />
-          <InputRow
-            label="Max Iterations"
-            value={maxIterations}
-            onChange={setMaxIterations}
-            tooltip="Maximum number of optimization steps."
-          />
-          <InputRow
-            label="Population Size"
-            value={populationSize}
-            onChange={setPopulationSize}
-            tooltip="Number of candidate positions ('fireflies') in the swarm. Larger population explores better but is slower."
-          />
-          <InputRow
-            label="Beta0"
-            value={beta0}
-            onChange={setBeta0}
-            tooltip="Attractiveness at distance 0. Controls how strongly fireflies are attracted to brighter ones."
-          />
-          <InputRow
-            label="Light Absorption"
-            value={lightAbsorption}
-            onChange={setLightAbsorption}
-            tooltip="Controls how quickly attractiveness decreases with distance. High values mean local search, low values mean global search."
-          />
-          <InputRow
-            label="Alpha"
-            value={alpha}
-            onChange={setAlpha}
-            tooltip="Randomization parameter. Controls the randomness of movement."
-          />
-          <InputRow
-            label="Initial Temperature"
-            value={initialTemperature}
-            onChange={setInitialTemperature}
-            tooltip="Starting temperature for Simulated Annealing. Higher means more random movement initially."
-          />
-          <InputRow
-            label="Cooling Rate"
-            value={coolingRate}
-            onChange={setCoolingRate}
-            tooltip="How fast the temperature decreases (0-1). Closer to 1 means slower cooling."
-          />
-        </View>
-
-        <View style={styles.controls}>
-          <View style={{ flex: 1, marginRight: 10 }}>
-            <TouchableOpacity
-              style={[styles.button, isRunning && styles.buttonDisabled]}
-              onPress={runTest}
-              disabled={isRunning}
-            >
-              <Text style={styles.buttonText}>
-                {isRunning ? "Running..." : "Run Single Test"}
-              </Text>
-            </TouchableOpacity>
+              >
+                <TouchableOpacity
+                  onPress={() => setUseWhiteBackground(!useWhiteBackground)}
+                  style={{
+                    marginRight: 15,
+                    flexDirection: "row",
+                    alignItems: "center",
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 16,
+                      height: 16,
+                      borderRadius: 4,
+                      borderWidth: 1,
+                      borderColor: ACCENT_COLOR,
+                      backgroundColor: useWhiteBackground
+                        ? ACCENT_COLOR
+                        : "transparent",
+                      marginRight: 6,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    {useWhiteBackground && (
+                      <Text style={{ color: "#fff", fontSize: 10 }}>✓</Text>
+                    )}
+                  </View>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      color: useWhiteBackground ? ACCENT_COLOR : "#666",
+                      fontWeight: useWhiteBackground ? "600" : "400",
+                    }}
+                  >
+                    White BG
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 4,
+                    backgroundColor: ACCENT_COLOR,
+                  }}
+                  onPress={async () => {
+                    try {
+                      setIsCapturing(true);
+                      await new Promise((resolve) => setTimeout(resolve, 100));
+                      const base64 = await captureRef(visualizationRef, {
+                        format: "png",
+                        quality: 0.8,
+                        result: "base64",
+                      });
+                      await Clipboard.setImageAsync(base64);
+                      Alert.alert("Success", "Image copied to clipboard");
+                    } catch (e) {
+                      console.error(e);
+                      Alert.alert("Error", "Failed to copy image");
+                    } finally {
+                      setIsCapturing(false);
+                    }
+                  }}
+                >
+                  <Text
+                    style={{ color: "#fff", fontSize: 12, fontWeight: "bold" }}
+                  >
+                    Copy Image
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
+          <View
+            style={[
+              styles.sectionContent,
+              useWhiteBackground && { backgroundColor: "#fff" },
+            ]}
+            ref={visualizationRef}
+            collapsable={false}
+          >
+            <Visualization
+              width={fieldWidth}
+              length={fieldLength}
+              result={selectedResult}
+              currentAnchors={currentAnchors}
+              currentTruePos={currentTruePos}
+              onUpdateTruePos={(x, y) => {
+                setManualTrueX(x.toFixed(2));
+                setManualTrueY(y.toFixed(2));
+                setCurrentTruePos({ x, y });
+              }}
+              onUpdateAnchor={(index, x, y) => {
+                const newAnchors = [...currentAnchors];
+                newAnchors[index] = { ...newAnchors[index], x, y };
+                setCurrentAnchors(newAnchors);
+              }}
+              onDragStart={() => setScrollEnabled(false)}
+              onDragEnd={() => setScrollEnabled(true)}
+              isRandomTruePos={isRandomTruePos}
+              isRunning={isRunning}
+              showHeatmap={showHeatmap}
+              onToggleHeatmap={() => setShowHeatmap(!showHeatmap)}
+              isSetup={viewMode === "config"}
+              hideControls={isCapturing}
+              useWhiteBackground={useWhiteBackground}
+            />
+            {isRunning && (
+              <View style={{ marginTop: 20 }}>
+                <View style={styles.progressBarContainer}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      { width: `${progress * 100}%` },
+                    ]}
+                  />
+                </View>
+                <TouchableOpacity
+                  onPress={cancelTest}
+                  style={{
+                    marginTop: 10,
+                    backgroundColor: "#d32f2f",
+                    padding: 8,
+                    borderRadius: 6,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.buttonText,
+                      { fontSize: 12, fontWeight: "bold" },
+                    ]}
+                  >
+                    CANCEL RUN
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
 
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: "row", marginBottom: 5 }}>
+        {viewMode === "config" ? (
+          <>
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>
+                  Test Configuration & Control
+                </Text>
+              </View>
+              <View style={styles.sectionContent}>
+                <Dropdown
+                  label="Test Mode"
+                  value={testMode}
+                  options={[
+                    { label: "Standard", value: "standard" },
+                    { label: "Parameter Sweep", value: "sweep" },
+                  ]}
+                  onSelect={(v) => setTestMode(v as TestMode)}
+                  disabled={isRunning}
+                  onToggle={(open) => setScrollEnabled(!open)}
+                />
+
+                {testMode === "standard" ? (
+                  <InputRow
+                    label="Number of Runs"
+                    value={numRuns}
+                    onChange={setNumRuns}
+                    disabled={isRunning}
+                  />
+                ) : (
+                  <>
+                    <Dropdown
+                      label="Sweep Parameter"
+                      value={sweepConfig.param}
+                      options={[
+                        {
+                          label: "Iteration Time Limit",
+                          value: "iterationTimeLimitMs",
+                        },
+                        { label: "Max Iterations", value: "maxIterations" },
+                        { label: "Population Size", value: "populationSize" },
+                        { label: "Beta0", value: "beta0" },
+                        { label: "Light Absorption", value: "lightAbsorption" },
+                        { label: "Alpha", value: "alpha" },
+                        { label: "Initial Temp", value: "initialTemperature" },
+                        { label: "Cooling Rate", value: "coolingRate" },
+                      ]}
+                      onSelect={(v) =>
+                        setSweepConfig((prev) => ({ ...prev, param: v }))
+                      }
+                      disabled={isRunning}
+                      onToggle={(open) => setScrollEnabled(!open)}
+                    />
+                    <InputRow
+                      label="Min Value"
+                      value={sweepConfig.min}
+                      onChange={(v) =>
+                        setSweepConfig((prev) => ({ ...prev, min: v }))
+                      }
+                      disabled={isRunning}
+                    />
+                    <InputRow
+                      label="Max Value"
+                      value={sweepConfig.max}
+                      onChange={(v) =>
+                        setSweepConfig((prev) => ({ ...prev, max: v }))
+                      }
+                      disabled={isRunning}
+                    />
+                    <InputRow
+                      label="Step Size"
+                      value={sweepConfig.step}
+                      onChange={(v) =>
+                        setSweepConfig((prev) => ({ ...prev, step: v }))
+                      }
+                      disabled={isRunning}
+                    />
+                    <InputRow
+                      label="Runs per Step"
+                      value={sweepConfig.runsPerStep}
+                      onChange={(v) =>
+                        setSweepConfig((prev) => ({ ...prev, runsPerStep: v }))
+                      }
+                      disabled={isRunning}
+                    />
+                  </>
+                )}
+
+                <InputRow
+                  label="Iteration Time Limit (ms)"
+                  value={iterationTimeLimit}
+                  onChange={setIterationTimeLimit}
+                  tooltip="Maximum time allowed for the optimization process."
+                  disabled={isRunning}
+                />
+                <InputRow
+                  label="Max Iterations"
+                  value={maxIterations}
+                  onChange={setMaxIterations}
+                  tooltip="Maximum number of optimization steps."
+                  disabled={isRunning}
+                />
+
+                <View
+                  style={[styles.controls, { marginTop: 10, marginBottom: 0 }]}
+                >
+                  {isRunning ? (
+                    <View
+                      style={[
+                        styles.button,
+                        styles.buttonDisabled,
+                        {
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                        },
+                      ]}
+                    >
+                      <View
+                        style={{ flexDirection: "row", alignItems: "center" }}
+                      >
+                        <ActivityIndicator
+                          color="#fff"
+                          style={{ marginRight: 10 }}
+                        />
+                        <Text style={styles.buttonText}>
+                          {(progress * 100).toFixed(0)}%
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={cancelTest}
+                        style={{
+                          backgroundColor: "rgba(255,255,255,0.2)",
+                          paddingHorizontal: 12,
+                          paddingVertical: 4,
+                          borderRadius: 4,
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.buttonText,
+                            { fontSize: 12, fontWeight: "bold" },
+                          ]}
+                        >
+                          CANCEL
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.button}
+                      onPress={runOptimizationTest}
+                    >
+                      <Text style={styles.buttonText}>
+                        Run Optimization Test
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            <CollapsibleSection title="Model & Filter">
+              <Dropdown
+                label="Propagation Model"
+                value={selectedModel}
+                options={[
+                  { label: "Log Normal", value: "LogNormal" },
+                  { label: "Two Ray Ground", value: "TwoRayGround" },
+                ]}
+                onSelect={setSelectedModel}
+                disabled={isRunning}
+                onToggle={(open) => setScrollEnabled(!open)}
+              />
+              <Dropdown
+                label="RSSI Filter"
+                value={selectedFilter}
+                options={[{ label: "Kalman", value: "Kalman" }]}
+                onSelect={setSelectedFilter}
+                disabled={isRunning}
+                onToggle={(open) => setScrollEnabled(!open)}
+              />
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Algorithm">
+              <Dropdown
+                label="Algorithm"
+                value={selectedAlgorithm}
+                options={[{ label: "MFASA", value: "MFASA" }]}
+                onSelect={setSelectedAlgorithm}
+                disabled={isRunning}
+                onToggle={(open) => setScrollEnabled(!open)}
+              />
+              <InputRow
+                label="Population Size"
+                value={populationSize}
+                onChange={setPopulationSize}
+                tooltip="Number of candidate positions ('fireflies') in the swarm. Larger population explores better but is slower."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Beta0"
+                value={beta0}
+                onChange={setBeta0}
+                tooltip="Attractiveness at distance 0. Controls how strongly fireflies are attracted to brighter ones."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Light Absorption"
+                value={lightAbsorption}
+                onChange={setLightAbsorption}
+                tooltip="Controls how quickly attractiveness decreases with distance. High values mean local search, low values mean global search."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Alpha"
+                value={alpha}
+                onChange={setAlpha}
+                tooltip="Randomization parameter. Controls the randomness of movement."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Initial Temperature"
+                value={initialTemperature}
+                onChange={setInitialTemperature}
+                tooltip="Starting temperature for Simulated Annealing. Higher means more random movement initially."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Cooling Rate"
+                value={coolingRate}
+                onChange={setCoolingRate}
+                tooltip="How fast the temperature decreases (0-1). Closer to 1 means slower cooling."
+                disabled={isRunning}
+              />
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Simulation Noise">
+              <InputRow
+                label="Base Sigma (dBm)"
+                value={baseSigma}
+                onChange={setBaseSigma}
+                tooltip="The standard deviation of RSSI noise at 0 meters distance."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Distance Slope (dBm/m)"
+                value={distanceSlope}
+                onChange={setDistanceSlope}
+                tooltip="How much the standard deviation increases per meter of distance."
+                disabled={isRunning}
+              />
+            </CollapsibleSection>
+
+            <CollapsibleSection title="True Position">
+              <TouchableOpacity
+                style={[styles.checkboxRow, isRunning && { opacity: 0.5 }]}
+                onPress={() =>
+                  !isRunning && setIsRandomTruePos(!isRandomTruePos)
+                }
+                disabled={isRunning}
+              >
+                <View
+                  style={[
+                    styles.checkbox,
+                    isRandomTruePos && styles.checkboxChecked,
+                  ]}
+                >
+                  {isRandomTruePos && (
+                    <Text style={{ color: "#fff", fontSize: 12 }}>✓</Text>
+                  )}
+                </View>
+                <Text style={styles.labelText}>
+                  Randomly Select True Position
+                </Text>
+              </TouchableOpacity>
+
+              {!isRandomTruePos && (
+                <>
+                  <InputRow
+                    label="True X (m)"
+                    value={manualTrueX}
+                    onChange={(v) => {
+                      setManualTrueX(v);
+                      setCurrentTruePos((p) => ({
+                        ...p,
+                        x: parseFloat(v) || 0,
+                      }));
+                    }}
+                    disabled={isRunning}
+                  />
+                  <InputRow
+                    label="True Y (m)"
+                    value={manualTrueY}
+                    onChange={(v) => {
+                      setManualTrueY(v);
+                      setCurrentTruePos((p) => ({
+                        ...p,
+                        y: parseFloat(v) || 0,
+                      }));
+                    }}
+                    disabled={isRunning}
+                  />
+                </>
+              )}
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Field & Anchors">
+              <Dropdown
+                label="Field Preset"
+                value={fieldPreset}
+                options={FIELD_PRESETS.map((p) => ({
+                  label: p.label,
+                  value: p.value,
+                }))}
+                onSelect={handlePresetChange}
+                disabled={isRunning}
+              />
+              {fieldPreset === "custom" && (
+                <>
+                  <InputRow
+                    label="Width (m)"
+                    value={inputWidth}
+                    onChange={setInputWidth}
+                    disabled={isRunning}
+                  />
+                  <InputRow
+                    label="Length (m)"
+                    value={inputLength}
+                    onChange={setInputLength}
+                    disabled={isRunning}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.button,
+                      {
+                        backgroundColor: ACCENT_COLOR,
+                        marginTop: 5,
+                        marginBottom: 15,
+                      },
+                      isRunning && styles.buttonDisabled,
+                    ]}
+                    onPress={() => {
+                      setFieldWidth(parseFloat(inputWidth) || 100);
+                      setFieldLength(parseFloat(inputLength) || 100);
+                    }}
+                    disabled={isRunning}
+                  >
+                    <Text style={styles.buttonText}>Resize Field</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              <InputRow
+                label="Number of Anchors"
+                value={numAnchors}
+                onChange={setNumAnchors}
+                disabled={isRunning}
+              />
+              <Dropdown
+                label="Anchor Placement"
+                value={anchorPlacementMode}
+                options={[
+                  { label: "Border", value: "border" },
+                  { label: "Grid", value: "grid" },
+                  { label: "Evenly Spaced", value: "evenly" },
+                  { label: "Random", value: "random" },
+                ]}
+                onSelect={(v) => setAnchorPlacementMode(v as any)}
+                disabled={isRunning}
+                onToggle={(open) => setScrollEnabled(!open)}
+              />
+
               <TouchableOpacity
                 style={[
                   styles.button,
+                  { backgroundColor: ACCENT_COLOR, marginTop: 10 },
                   isRunning && styles.buttonDisabled,
-                  { flex: 2, marginRight: 5 },
                 ]}
-                onPress={runBatchTest}
+                onPress={generateAnchors}
                 disabled={isRunning}
               >
-                <Text style={styles.buttonText}>Batch Run</Text>
+                <Text style={styles.buttonText}>Generate Anchors</Text>
               </TouchableOpacity>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                value={numRuns}
-                onChangeText={setNumRuns}
-                keyboardType="numeric"
-                placeholder="Runs"
-              />
-            </View>
-          </View>
-        </View>
+            </CollapsibleSection>
 
-        <View
-          style={{
-            flexDirection: "row",
-            justifyContent: "space-between",
-            marginBottom: 20,
-          }}
-        >
-          <TouchableOpacity
-            style={[
-              styles.button,
-              { marginRight: 10, backgroundColor: "#666" },
-            ]}
-            onPress={() => setShowLogs(!showLogs)}
-          >
-            <Text style={styles.buttonText}>
-              {showLogs ? "Hide Logs" : "Show Logs"}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.button, { backgroundColor: "#d32f2f" }]}
-            onPress={() => setLogs([])}
-          >
-            <Text style={styles.buttonText}>Clear Logs</Text>
-          </TouchableOpacity>
-        </View>
-
-        <FieldVisualization
-          width={parseFloat(fieldWidth) || 100}
-          length={parseFloat(fieldLength) || 100}
-          anchors={currentAnchors}
-          truePos={currentTruePos}
-          estPos={lastEstPos}
-          initialPopulation={initialPopulation}
-          finalPopulation={finalPopulation}
-          isRandomTruePos={isRandomTruePos}
-          isRunning={isRunning}
-          onUpdateTruePos={(x, y) => {
-            setManualTrueX(x.toFixed(2));
-            setManualTrueY(y.toFixed(2));
-            setCurrentTruePos({ x, y });
-          }}
-          onUpdateAnchor={(index, x, y) => {
-            const newAnchors = [...currentAnchors];
-            newAnchors[index] = { ...newAnchors[index], x, y };
-            setCurrentAnchors(newAnchors);
-          }}
-          onDragStart={() => setScrollEnabled(false)}
-          onDragEnd={() => setScrollEnabled(true)}
-        />
-
-        {batchResults && (
-          <View style={styles.resultBox}>
-            <Text
-              style={[
-                styles.resultText,
-                { fontWeight: "bold", marginBottom: 5 },
-              ]}
+            <CollapsibleSection
+              title="Propagation Constants"
+              defaultOpen={false}
             >
-              Batch Results ({batchResults.runs} runs)
-            </Text>
-            <Text style={styles.resultText}>
-              Avg Error: {batchResults.avgError.toFixed(2)}m
-            </Text>
-            <Text style={styles.resultText}>
-              Max Error: {batchResults.maxError.toFixed(2)}m
-            </Text>
-            <Text style={styles.resultText}>
-              Min Error: {batchResults.minError.toFixed(2)}m
-            </Text>
-            <Text style={styles.resultText}>
-              Std Dev: {batchResults.stdDev.toFixed(2)}m
-            </Text>
-            <Text style={styles.resultText}>
-              Avg Time: {batchResults.avgTime.toFixed(2)}ms
-            </Text>
-          </View>
+              <InputRow
+                label="Transmitter Height (m)"
+                value={txHeight}
+                onChange={setTxHeight}
+                tooltip="Height of the beacon from the ground. Affects ground reflection path."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Receiver Height (m)"
+                value={rxHeight}
+                onChange={setRxHeight}
+                tooltip="Height of the phone from the ground. Affects ground reflection path."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Frequency (Hz)"
+                value={freq}
+                onChange={setFreq}
+                tooltip="Signal frequency (usually 2.4GHz for BLE). Affects wavelength and path loss."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Transmitter Gain"
+                value={txGain}
+                onChange={setTxGain}
+                tooltip="Antenna gain of the beacon (linear scale)."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Receiver Gain"
+                value={rxGain}
+                onChange={setRxGain}
+                tooltip="Antenna gain of the phone (linear scale)."
+                disabled={isRunning}
+              />
+              <InputRow
+                label="Reflection Coefficient"
+                value={refCoeff}
+                onChange={setRefCoeff}
+                tooltip="How much signal is reflected by the ground (0-1). 1 means perfect reflection."
+                disabled={isRunning}
+              />
+            </CollapsibleSection>
+          </>
+        ) : null}
+
+        {viewMode === "results" && results.length > 0 && (
+          <>
+            {batchAnalysis && (
+              <CollapsibleSection title="Batch Analysis">
+                <View style={styles.logBatchContainer}>
+                  <View style={styles.logBatchHeader}>
+                    <View>
+                      <Text style={styles.logBatchTitle}>
+                        Summary Statistics
+                      </Text>
+                      <Text style={styles.logBatchTime}>
+                        {batchAnalysis.totalRuns} Runs Total
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.copyButton}
+                      onPress={async () => {
+                        const text = `Batch Analysis:
+Avg Error: ${batchAnalysis.avgError.toFixed(3)}m
+Position RMSE: ${batchAnalysis.rmse.toFixed(3)}m
+Avg RSSI RMSE: ${batchAnalysis.avgRssiRmse.toFixed(3)}
+Std Dev: ${batchAnalysis.stdDev.toFixed(3)}m
+Median: ${batchAnalysis.medianError.toFixed(3)}m
+Avg Iterations: ${batchAnalysis.avgIterations.toFixed(1)}
+Min/Max: ${batchAnalysis.minError.toFixed(3)}m / ${batchAnalysis.maxError.toFixed(3)}m
+Avg Time: ${batchAnalysis.avgDuration.toFixed(2)}ms
+Success <1m: ${batchAnalysis.successRate1m.toFixed(1)}%
+Success <2m: ${batchAnalysis.successRate2m.toFixed(1)}%`;
+                        await Clipboard.setStringAsync(text);
+                        Alert.alert("Copied", "Analysis copied to clipboard");
+                      }}
+                    >
+                      <Text style={styles.copyButtonText}>Copy</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={[styles.logEntries, { maxHeight: undefined }]}>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        marginBottom: 10,
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[styles.resultText, { fontWeight: "bold" }]}
+                        >
+                          Accuracy
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Avg Error: {batchAnalysis.avgError.toFixed(3)}m
+                        </Text>
+                        <Text style={styles.resultText}>
+                          RMSE: {batchAnalysis.rmse.toFixed(3)}m
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Std Dev: {batchAnalysis.stdDev.toFixed(3)}m
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Median: {batchAnalysis.medianError.toFixed(3)}m
+                        </Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[styles.resultText, { fontWeight: "bold" }]}
+                        >
+                          Performance
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Avg Time: {batchAnalysis.avgDuration.toFixed(2)}ms
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Avg Iterations:{" "}
+                          {batchAnalysis.avgIterations.toFixed(1)}
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Min Err: {batchAnalysis.minError.toFixed(3)}m
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Max Err: {batchAnalysis.maxError.toFixed(3)}m
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={{
+                        borderTopWidth: 1,
+                        borderTopColor: "#eee",
+                        paddingTop: 10,
+                        marginBottom: 10,
+                      }}
+                    >
+                      <Text style={[styles.resultText, { fontWeight: "bold" }]}>
+                        Success Rates
+                      </Text>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <Text style={styles.resultText}>
+                          Error &lt; 1.0m:{" "}
+                          {batchAnalysis.successRate1m.toFixed(1)}%
+                        </Text>
+                        <Text style={styles.resultText}>
+                          Error &lt; 2.0m:{" "}
+                          {batchAnalysis.successRate2m.toFixed(1)}%
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
+                      style={{
+                        borderTopWidth: 1,
+                        borderTopColor: "#eee",
+                        paddingTop: 10,
+                      }}
+                    >
+                      <Text style={[styles.resultText, { fontWeight: "bold" }]}>
+                        Best Runs (Lowest Error)
+                      </Text>
+                      <View style={{ maxHeight: 120, marginTop: 5 }}>
+                        <ScrollView nestedScrollEnabled={true}>
+                          {batchAnalysis.bestRuns.map((r, i) => (
+                            <TouchableOpacity
+                              key={i}
+                              onPress={() => {
+                                const index = results.findIndex(
+                                  (res) => res.id === r.id,
+                                );
+                                if (index !== -1) setSelectedResultIndex(index);
+                              }}
+                            >
+                              <Text
+                                style={[styles.resultText, { color: "#666" }]}
+                              >
+                                {i + 1}. Run {r.id}: {r.error.toFixed(3)}m (
+                                {r.duration.toFixed(1)}ms)
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      </View>
+                    </View>
+
+                    {testMode === "sweep" && sweepResults.length > 0 && (
+                      <View
+                        style={{
+                          borderTopWidth: 1,
+                          borderTopColor: "#eee",
+                          paddingTop: 10,
+                          marginBottom: 10,
+                        }}
+                      >
+                        <Text
+                          style={[styles.resultText, { fontWeight: "bold" }]}
+                        >
+                          Best Parameter Value
+                        </Text>
+                        {(() => {
+                          const bestStep = [...sweepResults].sort(
+                            (a, b) => a.avgError - b.avgError,
+                          )[0];
+                          return (
+                            <Text style={styles.resultText}>
+                              {sweepConfig.param}: {bestStep.val.toFixed(4)}{" "}
+                              (Avg Error: {bestStep.avgError.toFixed(3)}m, Avg
+                              Iter: {bestStep.avgIterations.toFixed(1)})
+                            </Text>
+                          );
+                        })()}
+                      </View>
+                    )}
+
+                    {testMode === "sweep" && sweepResults.length > 0 && (
+                      <SweepGraph
+                        results={sweepResults}
+                        paramName={sweepConfig.param}
+                        selectedIndex={selectedSweepIndex}
+                        onSelectPoint={(idx) => {
+                          setSelectedSweepIndex(idx);
+                          // Select the first run of this sweep step
+                          const sweepStep = sweepResults[idx];
+                          if (sweepStep && sweepStep.runs.length > 0) {
+                            const firstRunId = sweepStep.runs[0].id;
+                            const resultIdx = results.findIndex(
+                              (r) => r.id === firstRunId,
+                            );
+                            if (resultIdx !== -1) {
+                              setSelectedResultIndex(resultIdx);
+                            }
+                          }
+                        }}
+                      />
+                    )}
+                  </View>
+                </View>
+              </CollapsibleSection>
+            )}
+
+            <CollapsibleSection title="Individual Runs">
+              <Dropdown
+                label="Select Run"
+                value={selectedResultIndex.toString()}
+                options={results.map((r, i) => ({
+                  label:
+                    testMode === "sweep"
+                      ? `Run ${i + 1} (${sweepConfig.param}=${r.params[
+                          sweepConfig.param
+                        ].toFixed(2)}) - Err: ${r.error.toFixed(2)}m`
+                      : `Run ${i + 1} - Err: ${r.error.toFixed(2)}m`,
+                  value: i.toString(),
+                }))}
+                onSelect={(v) => setSelectedResultIndex(parseInt(v))}
+                onToggle={(open) => setScrollEnabled(!open)}
+              />
+
+              {selectedResult && (
+                <View style={styles.logBatchContainer}>
+                  <View style={styles.logBatchHeader}>
+                    <View>
+                      <Text style={styles.logBatchTitle}>
+                        Run {selectedResultIndex + 1}
+                      </Text>
+                      <Text style={styles.logBatchTime}>
+                        ID: {selectedResult.id}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.copyButton}
+                      onPress={async () => {
+                        const text = `Run ${selectedResultIndex + 1} Details:
+Error: ${selectedResult.error.toFixed(3)}m
+RSSI RMSE: ${selectedResult.rssiRmse.toFixed(3)}
+Time: ${selectedResult.duration.toFixed(2)}ms
+Iterations: ${selectedResult.iterations}
+Est Pos: (${selectedResult.estPos.x.toFixed(2)}, ${selectedResult.estPos.y.toFixed(2)})
+True Pos: (${selectedResult.truePos.x.toFixed(2)}, ${selectedResult.truePos.y.toFixed(2)})`;
+                        await Clipboard.setStringAsync(text);
+                        Alert.alert(
+                          "Copied",
+                          "Run details copied to clipboard",
+                        );
+                      }}
+                    >
+                      <Text style={styles.copyButtonText}>Copy</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={[styles.logEntries, { maxHeight: undefined }]}>
+                    <Text style={styles.resultText}>
+                      Error: {selectedResult.error.toFixed(2)}m
+                    </Text>
+                    <Text style={styles.resultText}>
+                      RSSI RMSE: {selectedResult.rssiRmse.toFixed(2)}
+                    </Text>
+                    <Text style={styles.resultText}>
+                      Time: {selectedResult.duration.toFixed(2)}ms
+                    </Text>
+                    <Text style={styles.resultText}>
+                      Iterations: {selectedResult.iterations}
+                    </Text>
+                    <Text style={styles.resultText}>
+                      Est Pos: ({selectedResult.estPos.x.toFixed(2)},{" "}
+                      {selectedResult.estPos.y.toFixed(2)})
+                    </Text>
+                    <Text style={styles.resultText}>
+                      True Pos: ({selectedResult.truePos.x.toFixed(2)},{" "}
+                      {selectedResult.truePos.y.toFixed(2)})
+                    </Text>
+                    {testMode === "sweep" && (
+                      <Text style={[styles.resultText, { fontWeight: "bold" }]}>
+                        {sweepConfig.param}:{" "}
+                        {selectedResult.params[sweepConfig.param]}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              )}
+            </CollapsibleSection>
+          </>
         )}
 
-        {lastResult && (
-          <View style={styles.resultBox}>
-            <Text style={styles.resultText}>{lastResult}</Text>
-          </View>
-        )}
+        {!isRunning && viewMode === "results" && logBatches.length > 0 && (
+          <CollapsibleSection title="Logs" defaultOpen={false}>
+            <TouchableOpacity
+              style={[
+                styles.button,
+                { backgroundColor: "#d32f2f", marginBottom: 15 },
+              ]}
+              onPress={() => setLogBatches([])}
+            >
+              <Text style={styles.buttonText}>Clear All Logs</Text>
+            </TouchableOpacity>
 
-        {showLogs && (
-          <View style={styles.logsContainer}>
-            <Text style={styles.logsTitle}>Logs:</Text>
-            {logs.map((log, i) => (
-              <Text key={i} style={styles.logText}>
-                {log}
-              </Text>
+            {logBatches.map((batch) => (
+              <View key={batch.id} style={styles.logBatchContainer}>
+                <View style={styles.logBatchHeader}>
+                  <View>
+                    <Text style={styles.logBatchTitle}>{batch.type} Run</Text>
+                    <Text style={styles.logBatchTime}>
+                      {new Date(batch.startTime).toLocaleString()}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.copyButton}
+                    onPress={async () => {
+                      const text = batch.entries
+                        .map(
+                          (e) =>
+                            `[${new Date(e.timestamp).toLocaleTimeString()}] ${
+                              e.message
+                            }`,
+                        )
+                        .join("\n");
+                      await Clipboard.setStringAsync(text);
+                      Alert.alert("Copied", "Logs copied to clipboard");
+                    }}
+                  >
+                    <Text style={styles.copyButtonText}>Copy</Text>
+                  </TouchableOpacity>
+                </View>
+                <ScrollView
+                  style={styles.logEntries}
+                  nestedScrollEnabled={true}
+                >
+                  {batch.entries.map((entry, i) => (
+                    <Text key={i} style={styles.logText}>
+                      <Text style={styles.logTimestamp}>
+                        [{new Date(entry.timestamp).toLocaleTimeString()}]
+                      </Text>{" "}
+                      {entry.message}
+                    </Text>
+                  ))}
+                </ScrollView>
+              </View>
             ))}
-          </View>
+          </CollapsibleSection>
         )}
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -1258,7 +2845,26 @@ const styles = StyleSheet.create({
   },
   header: {
     marginBottom: 20,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    minHeight: 40,
+  },
+  backButton: {
+    position: "absolute",
+    left: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+  },
+  backButtonText: {
+    fontSize: 24,
+    color: "#333",
+    fontWeight: "bold",
+    lineHeight: 28,
   },
   title: {
     fontSize: 24,
@@ -1269,66 +2875,104 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     backgroundColor: "#fff",
     borderRadius: 8,
-    padding: 10,
     borderWidth: 1,
     borderColor: "#ddd",
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#fcfcfc",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+  },
+  sectionContent: {
+    padding: 12,
   },
   sectionTitle: {
     fontSize: 16,
     fontWeight: "bold",
-    marginTop: 10,
-    marginBottom: 5,
     color: ACCENT_COLOR,
+  },
+  collapseIcon: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#999",
+    width: 20,
+    textAlign: "center",
   },
   inputRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    justifyContent: "space-between",
+    marginBottom: 12,
   },
-  inputLabel: {
+  labelContainer: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  labelText: {
     fontSize: 14,
     color: "#333",
   },
+  controlWrapper: {
+    width: 140,
+  },
   input: {
-    flex: 1,
     borderWidth: 1,
     borderColor: "#ccc",
-    borderRadius: 4,
-    padding: 5,
+    borderRadius: 6,
+    padding: 10,
     fontSize: 14,
     backgroundColor: "#fafafa",
-    maxWidth: 100,
+    width: "100%",
+    color: "#333",
   },
   dropdownButton: {
-    flex: 1,
     borderWidth: 1,
     borderColor: "#ccc",
-    borderRadius: 4,
-    padding: 8,
+    borderRadius: 6,
+    padding: 10,
     backgroundColor: "#fafafa",
+    width: "100%",
   },
   dropdownButtonText: {
     fontSize: 14,
     color: "#333",
   },
   dropdownList: {
-    position: "absolute",
-    top: "100%",
-    left: 0,
-    right: 0,
     backgroundColor: "#fff",
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 4,
-    marginTop: 2,
-    zIndex: 1000,
-    elevation: 5,
+    borderColor: "#bbb",
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  dropdownModalContainer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2000,
+    elevation: 50,
+  },
+  dropdownBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  dropdownModalList: {
+    position: "absolute",
+    zIndex: 2001,
+    elevation: 50,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
   },
   dropdownItem: {
-    padding: 10,
+    padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    borderBottomColor: "#f0f0f0",
   },
   dropdownItemText: {
     fontSize: 14,
@@ -1336,105 +2980,155 @@ const styles = StyleSheet.create({
   },
   controls: {
     flexDirection: "row",
-    marginBottom: 20,
+    marginVertical: 20,
     justifyContent: "center",
   },
   button: {
     flex: 1,
     backgroundColor: ACCENT_COLOR,
-    padding: 12,
+    padding: 14,
     borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.1)",
   },
   buttonDisabled: {
-    opacity: 0.6,
+    backgroundColor: "#ccc",
   },
   buttonText: {
     color: "#fff",
     fontWeight: "bold",
     fontSize: 16,
   },
+  progressBarContainer: {
+    height: 6,
+    backgroundColor: "#eee",
+    borderRadius: 3,
+    marginTop: 15,
+    overflow: "hidden",
+  },
+  progressBarFill: {
+    height: "100%",
+    backgroundColor: ACCENT_COLOR,
+  },
   resultBox: {
-    backgroundColor: "#fff",
+    backgroundColor: "#f9f9f9",
     padding: 15,
     borderRadius: 8,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: "#eee",
   },
   resultText: {
+    fontSize: 13,
+    color: "#444",
+    fontFamily: "monospace",
+    lineHeight: 18,
+  },
+  logBatchContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    marginBottom: 15,
+    overflow: "hidden",
+  },
+  logBatchHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#f5f5f5",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  logBatchTitle: {
     fontSize: 14,
+    fontWeight: "bold",
+    color: "#333",
+  },
+  logBatchTime: {
+    fontSize: 11,
+    color: "#666",
+    marginTop: 2,
+  },
+  copyButton: {
+    backgroundColor: ACCENT_COLOR,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  copyButtonText: {
+    fontSize: 12,
+    color: "#fff",
+    fontWeight: "600",
+  },
+  logEntries: {
+    padding: 12,
+    backgroundColor: "#fafafa",
+    maxHeight: 300,
+  },
+  logText: {
+    fontSize: 11,
+    marginBottom: 2,
     color: "#333",
     fontFamily: "monospace",
   },
-  logsContainer: {
-    backgroundColor: "#fff",
-    borderRadius: 8,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: "#ddd",
-  },
-  logsTitle: {
-    fontSize: 16,
-    fontWeight: "bold",
-    marginBottom: 10,
-  },
-  logText: {
-    fontSize: 12,
-    marginBottom: 4,
-    color: "#333",
+  logTimestamp: {
+    color: "#888",
   },
   fieldContainer: {
-    marginBottom: 20,
+    marginVertical: 20,
     backgroundColor: "#fff",
-    borderRadius: 8,
-    padding: 10,
+    borderRadius: 12,
+    padding: 15,
     borderWidth: 1,
     borderColor: "#ddd",
   },
   field: {
-    backgroundColor: "#eee",
-    borderWidth: 1,
-    borderColor: "#ccc",
+    backgroundColor: "#f0f0f0",
     position: "relative",
-    marginBottom: 10,
+    borderRadius: 8,
   },
   legend: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    justifyContent: "center",
     flexWrap: "wrap",
+    marginTop: 10,
   },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
-    marginRight: 10,
-    marginBottom: 5,
+    marginRight: 15,
+    marginBottom: 8,
   },
   legendText: {
     fontSize: 12,
-    color: "#333",
+    color: "#666",
   },
   legendMarkerBase: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1,
     borderColor: "#fff",
-    marginRight: 8,
+    marginRight: 6,
   },
   checkboxRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 15,
+    paddingVertical: 5,
   },
   checkbox: {
-    width: 20,
-    height: 20,
-    borderWidth: 1,
-    borderColor: "#ccc",
-    marginRight: 10,
-    backgroundColor: "#fafafa",
+    width: 22,
+    height: 22,
+    borderWidth: 2,
+    borderColor: ACCENT_COLOR,
+    borderRadius: 4,
+    marginRight: 12,
+    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
   },

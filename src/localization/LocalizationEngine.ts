@@ -5,6 +5,7 @@ import {
   DEFAULT_FIELD_DIMENSIONS,
   DEFAULT_SOLVER_THROTTLE_MS,
   DEFAULT_STALE_BEACON_MS,
+  DEFAULT_KALMAN_CONFIG,
 } from "./LocalizationConfig";
 import { KalmanFilter } from "./filters/KalmanFilter";
 import { LogNormalModel } from "./models/LogNormalModel";
@@ -134,7 +135,13 @@ export class LocalizationEngine implements LocalizationEngineApi {
 
   private getFilter(mac: string) {
     if (!this.filters.has(mac)) {
-      this.filters.set(mac, new KalmanFilter());
+      this.filters.set(
+        mac,
+        new KalmanFilter({
+          processNoise: DEFAULT_KALMAN_CONFIG.processNoise,
+          measurementNoise: DEFAULT_KALMAN_CONFIG.measurementNoise,
+        }),
+      );
     }
     return this.filters.get(mac)!;
   }

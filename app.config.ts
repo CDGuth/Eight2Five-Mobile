@@ -1,8 +1,8 @@
 module.exports = {
   expo: {
     owner: "cdguth",
-    name: "Eight2Five-iOS-Android",
-    slug: "Eight2Five-iOS-Android",
+    name: "tool/optimization-test",
+    slug: "optimization-test",
     platforms: ["ios", "android"],
     version: "0.0.0",
     orientation: "portrait",
@@ -15,12 +15,12 @@ module.exports = {
       backgroundColor: "#ffffff",
     },
     ios: {
-      bundleIdentifier: "com.anonymous.Eight2FiveiOSAndroid",
+      bundleIdentifier: "com.anonymous.OptimizationTest",
       supportsTablet: false,
     },
     android: {
       // Android application id used by native projects
-      package: "com.anonymous.Eight2FiveiOSAndroid",
+      package: "com.anonymous.OptimizationTest",
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#ffffff",

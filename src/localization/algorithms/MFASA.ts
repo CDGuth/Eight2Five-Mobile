@@ -26,7 +26,7 @@ export interface MFASAOptions {
   initialTemperature: number;
   coolingRate: number;
   timeBudgetMs: number; // Per-slice time budget
-  totalTimeLimitMs?: number; // Total execution time limit
+  iterationTimeLimitMs?: number; // Total execution time limit
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -43,6 +43,7 @@ function now(): number {
 export class MFASAOptimizer implements LocalizationOptimizer {
   private readonly options: MFASAOptions;
   private currentTimeout: any = null;
+  private rejectCurrentSolve: ((reason?: any) => void) | null = null;
 
   constructor(options: Partial<MFASAOptions> = {}) {
     this.options = {
@@ -56,6 +57,10 @@ export class MFASAOptimizer implements LocalizationOptimizer {
       clearTimeout(this.currentTimeout);
       this.currentTimeout = null;
     }
+    if (this.rejectCurrentSolve) {
+      this.rejectCurrentSolve(new Error("Cancelled"));
+      this.rejectCurrentSolve = null;
+    }
   }
 
   solve(opts: OptimizationInput): Promise<PositionEstimate> {
@@ -64,7 +69,7 @@ export class MFASAOptimizer implements LocalizationOptimizer {
     const config: MFASAOptions = {
       ...this.options,
       timeBudgetMs: opts.timeBudgetMs ?? this.options.timeBudgetMs,
-      totalTimeLimitMs: opts.totalTimeLimitMs,
+      iterationTimeLimitMs: opts.iterationTimeLimitMs,
     };
 
     const anchorMap = this.buildAnchorMap(opts.anchors);
@@ -72,6 +77,7 @@ export class MFASAOptimizer implements LocalizationOptimizer {
     const startTime = now();
 
     return new Promise((resolve, reject) => {
+      this.rejectCurrentSolve = reject;
       const population = this.initializePopulation(
         config.populationSize,
         opts,
@@ -92,14 +98,17 @@ export class MFASAOptimizer implements LocalizationOptimizer {
       const step = () => {
         this.currentTimeout = null;
         const stepStart = now();
-        // If totalTimeLimitMs is set, we ignore maxIterations and run until time is up
-        // Otherwise we respect maxIterations
+        // Respect both maxIterations and iterationTimeLimitMs
         const hasTimeLimit =
-          config.totalTimeLimitMs !== undefined && config.totalTimeLimitMs > 0;
+          config.iterationTimeLimitMs !== undefined &&
+          config.iterationTimeLimitMs > 0;
 
-        while (hasTimeLimit ? true : iteration < config.maxIterations) {
+        while (iteration < config.maxIterations) {
           // Check total time limit
-          if (hasTimeLimit && now() - startTime >= config.totalTimeLimitMs!) {
+          if (
+            hasTimeLimit &&
+            now() - startTime >= config.iterationTimeLimitMs!
+          ) {
             break;
           }
 
@@ -132,6 +141,7 @@ export class MFASAOptimizer implements LocalizationOptimizer {
         best.diagnostics = {
           executionTimeMs: now() - startTime,
           evaluations: metrics.evaluations,
+          iterations: iteration,
           initialError,
           finalError: best.errorRmse,
           finalTemperature: temperature,
@@ -142,6 +152,7 @@ export class MFASAOptimizer implements LocalizationOptimizer {
             error: f.error,
           })),
         };
+        this.rejectCurrentSolve = null;
         resolve(best);
       };
 
