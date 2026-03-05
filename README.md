@@ -1,6 +1,6 @@
-## Eight2Five Monorepo
+## Eight2Five Mobile
 
-This repo hosts the production mobile app, the optimization testbed, a shared localization/ble package, and the custom Expo module for KBeaconPro scanning.
+This monorepo hosts the production mobile app, the optimization testbed, a shared localization/ble package, and the custom Expo module for KBeaconPro scanning.
 
 - Apps
 	- [apps/mobile](apps/mobile) – production client
@@ -16,10 +16,11 @@ npm run start:mobile          # metro/devclient for production app
 npm run start:testbed         # metro/devclient for testbed
 ```
 
-### Quality gates
+### Quality checks
 - Lint all workspaces: `npm run lint`
 - Type-check all workspaces: `npm run type-check`
 - Jest (skips empty suites): `npm run test`
+- Type-check, lint, test, and run expo-doctor all workspaces: `npm run precommit-check`
 
 ### GitHub Actions
 - test.yml – install once, run expo-doctor on both apps, then lint/type-check/test across workspaces
