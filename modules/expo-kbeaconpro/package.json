@@ -8,5 +8,8 @@
   },
   "expo": {
     "plugin": "./app.plugin.js"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

@@ -5,7 +5,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "modules/expo-kbeaconpro"
+    "modules/expo-kbeaconpro",
+    "modules/expo-pans-ble-api"
   ],
   "scripts": {
     "start:mobile": "npm run start --workspace apps/mobile",

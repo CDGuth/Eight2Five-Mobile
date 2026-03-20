@@ -20,6 +20,7 @@
     "expo-dev-client": "~55.0.10",
     "expo-file-system": "~55.0.10",
     "expo-kbeaconpro": "file:../../modules/expo-kbeaconpro",
+    "expo-pans-ble-api": "file:../../modules/expo-pans-ble-api",
     "expo-sharing": "~55.0.11",
     "expo-status-bar": "~55.0.4",
     "react": "19.2.0",
@@ -59,7 +60,8 @@
     "collectCoverageFrom": [
       "src/**/*.{ts,tsx}",
       "../../packages/shared/src/**/*.{ts,tsx}",
-      "../../modules/expo-kbeaconpro/src/**/*.{ts,tsx}"
+      "../../modules/expo-kbeaconpro/src/**/*.{ts,tsx}",
+      "../../modules/expo-pans-ble-api/src/**/*.{ts,tsx}"
     ],
     "setupFilesAfterEnv": [
       "<rootDir>/jest.setup.ts"

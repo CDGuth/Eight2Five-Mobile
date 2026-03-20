@@ -45,6 +45,17 @@ const config: ExpoConfig = {
           "Our app uses your location to scan for nearby KBeaconPro devices.",
       },
     ],
+    [
+      "../../modules/expo-pans-ble-api",
+      {
+        bluetoothAlwaysUsageDescription:
+          "Our app uses Bluetooth to find, connect and communicate with DWM1001 PANS BLE devices.",
+        bluetoothPeripheralUsageDescription:
+          "Our app uses Bluetooth to find, connect and communicate with DWM1001 PANS BLE devices.",
+        locationWhenInUseUsageDescription:
+          "Our app uses your location to scan for nearby DWM1001 PANS BLE devices.",
+      },
+    ],
   ],
   experiments: {
     reactCompiler: true,

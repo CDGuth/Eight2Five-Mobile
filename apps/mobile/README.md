@@ -20,10 +20,16 @@ npm run test --workspace apps/mobile
 - Config: [app.config.ts](app.config.ts)
 - Assets resolved from [../../assets](../../assets)
 - Native KBeaconPro plugin: [../../modules/expo-kbeaconpro](../../modules/expo-kbeaconpro)
+- Native PANS BLE plugin: [../../modules/expo-pans-ble-api](../../modules/expo-pans-ble-api)
 - Shared localization stack: [../../packages/shared](../../packages/shared)
 
 ### Environment
 - `USE_NATIVE_BEACONING=true` enables native beaconing flag (read via `extra.isNativeBeaconingEnabled`).
+
+### Provider model
+- The shared scanner hook now supports source injection through provider abstractions.
+- Default behavior is now automatic dual-source mode (`kbeacon` + `pans-ble`) without app-config setup.
+- You can still override in code using `useBeaconScanner({ sourceKind: "kbeacon" | "pans-ble" | "auto" })`.
 
 ### Build
 Use EAS (local or cloud) from this directory:

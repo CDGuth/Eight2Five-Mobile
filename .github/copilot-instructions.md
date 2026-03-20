@@ -6,11 +6,13 @@ You are an expert in TypeScript, React Native, Expo, and Mobile UI development.
 
 ## Project Description
 
-This repository contains an Expo-based React Native application (iOS and Android) for tracking marching band performers on a rectangular practice field. Each performer carries a mobile device that receives Bluetooth Low Energy (BLE) advertisements from fixed KBeaconPro beacons positioned around or within the field. The native module in `modules/expo-kbeaconpro` exposes scanning APIs and delivers raw advertisement payloads (MAC address, RSSI, and manufacturer data) into the JavaScript layer.
+This repository contains an Expo-based React Native application (iOS and Android) for tracking marching band performers on a rectangular practice field. The platform is evolving from a BLE-only ingestion path toward a source-agnostic localization architecture where location measurements can come from multiple providers.
 
-The app parses those advertisements into higher-level beacon state using utilities in `src/utils` (for example `beaconParser`), extracting identity information (including Tx power) and field-relative anchor coordinates (encoded as X/Y percentages and Z height in centimeters). A custom hook, `useBeaconScanner`, subscribes to the native scanner, maintains an in-memory map of visible beacons, and feeds each update into a localization pipeline.
+Today, BLE advertisements from fixed KBeaconPro beacons are ingested through `modules/expo-kbeaconpro`. The repository now also includes `modules/expo-pans-ble-api`, a new Expo module surface for BLE-accessible DWM1001/PANS workflows. In this phase, PANS support is BLE-only and intentionally excludes UART/SPI transports.
 
-The localization subsystem in `src/localization` smooths noisy RSSI values with a 1D Kalman filter, then uses a propagation model to relate distance and received power. Indoors it applies a standard log-normal path-loss model; outdoors it uses the two-ray ground-reflection model derived from the BLE-based outdoor localization paper in `.github/docs/BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms/`. Rather than converting RSSI to distance directly, the system formulates localization as an optimization problem: it searches for the 2D position that minimizes the root-mean-square error between measured RSSI at each anchor and the RSSI predicted by the chosen propagation model.
+The app parses BLE packets into higher-level beacon state using shared utilities (for example `beaconParser`). A shared hook, `useBeaconScanner`, now supports source injection through provider abstractions, allowing side-by-side migration between KBeacon and PANS BLE sources without forcing downstream UI rewrites.
+
+The localization subsystem in `src/localization` smooths RSSI values with a 1D Kalman filter and uses propagation models to compare measured and predicted signal values. Indoors it applies a log-normal path-loss model; outdoors it uses a two-ray ground-reflection model derived from `.github/docs/BLE-Based Outdoor Localization With Two-Ray Ground-Reflection Model Using Optimization Algorithms/`. The optimizer searches for a 2D position that minimizes RMSE across active anchors.
 
 To solve this optimization problem, the project currently implements a memetic Firefly Algorithm with Simulated Annealing (MFASA) in `src/localization/algorithms/MFASA.ts`. MFASA maintains a population of candidate positions ("fireflies"), moves them toward better solutions based on relative brightness (lower RMSE), and applies simulated annealing-style random perturbations with a cooling schedule to escape local minima. The optimizer is time-sliced (using small per-step time budgets) so that iterative computation does not block the React Native UI thread. Future algorithms (e.g., GA, PSO, or simpler multilateration) can be added behind the same optimizer interface.
 
@@ -29,6 +31,7 @@ This project is organized as a monorepo to unify logic across mobile application
         -   `src/utils/`: Generic helpers for identity parsing, coordinates, and math.
 -   **`modules/`**: Contains custom Expo modules.
     -   **`modules/expo-kbeaconpro/`**: A native module wrapping the KBeaconPro SDKs (Android/Swift) to provide a unified BLE scanning interface to the JavaScript layer.
+    -   **`modules/expo-pans-ble-api/`**: A native module exposing BLE-accessible DWM1001/PANS interactions through a unified TypeScript API contract.
 
 ## Monorepo Dependency Policy
 
@@ -38,7 +41,7 @@ To maintain stability and prevent version conflicts (e.g., duplicate React insta
 -   **Justification**: Centralizing dependencies in `packages/shared` ensures all sub-apps use the same versions, reducing bundle size and preventing hard-to-debug "multiple versions of X" runtime errors.
 -   **Command**: Use `npm install <package-name> --workspace @eight2five/shared` to add a new shared dependency.
 
-Downstream consumers (screens or components) typically use `useBeaconScanner` to obtain three views of state: the raw per-MAC beacon map for diagnostics, the filtered beacon measurements used by the localization engine, and the latest estimated performer position in meters relative to the field. Copilot suggestions should preserve this flow (native scanner → parser → Kalman filter + propagation model → MFASA optimizer → UI) and avoid breaking the public surface of the native module or hooks without a clear reason.
+Downstream consumers (screens or components) should treat `useBeaconScanner` as the source-agnostic integration point. The hook returns the raw per-MAC map for diagnostics, filtered measurements consumed by localization, and the latest estimated position. Copilot suggestions should preserve this flow (provider source → parser/adapter → filter + model → MFASA optimizer → UI), avoid transport-specific coupling in UI code, and keep side-by-side migration support unless explicitly removed.
 
   Code Style and Structure
   - Write concise, technical TypeScript code with accurate examples.
